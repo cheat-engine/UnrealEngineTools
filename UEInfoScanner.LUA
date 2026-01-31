@@ -1,0 +1,1769 @@
+--UEInfoScanner and UEInfoStructureDissect are licensed under the MIT License by Eric Heijnen / Cheat Engine
+
+
+function UObject_getName(UObjectAddress)
+  if UEngine==nil or UEngine.UObject==nil or UEngine.UObject.Name==nil or UEngine.IndexToName==nil then
+    return nil,'UEngine.UObject.Name not initialized yet'
+  end
+
+  --make sure it's an UObject. e.g UField is, but FField is not
+  local vftableptr=readPointer(UObjectAddress)
+  if vftableptr and vftableptr>=getAddress(process) and vftableptr<getAddress(process)+getModuleSize(process) then
+    local i=readQword(UObjectAddress+UEngine.UObject.Name)
+    local index=i & 0xffffffff
+    local number=i >> 32
+    local name=UEngine.IndexToName[i&0xffffffff]
+
+    if name and number>0 then
+      name=name..'_'..number
+    end
+
+    return name
+  end
+end
+
+function UObject_enumProperties(address)
+  local class=readPointer(address+UEngine.UObject.Class)
+  if class then
+    return UClass.enumProperties(class)
+  else
+    return nil,'Failure to read class field'
+  end
+end
+
+function UClass_enumProperties(class,usealt)
+  local p
+  if not usealt then
+    p=readPointer(class+UEngine.UClass.PropertyLink)
+  end
+
+  if p==nil or p==0 then
+    --maybe time to swap
+    p=readPointer(class+UEngine.UClass.PropertyLinkAlt)
+  end
+  if p and p~=0 then
+    local r={}
+    while p and p~=0 do
+      e={}
+      local v=readInteger(p+UEngine.FProperty.Name)
+      local name=UEngine.IndexToName[v]
+      local offset=readInteger(p+UEngine.FProperty.Offset)
+
+      e.offset=offset
+      e.propertyAddress=p
+
+      local c=readPointer(p+UEngine.FProperty.Class)
+      if c==nil then
+        return nil,'c was nil'
+      end
+      local nameIndex=readInteger(c+UEngine.FFieldClass.Name)
+
+      if nameIndex==nil then
+        return nil,'nameIndex==nil'
+      end
+
+      e.propertyType=UEngine.IndexToName[nameIndex]
+
+
+      if UEngine.FProperty.Size then
+        e.size=readInteger(p+UEngine.FProperty.Size)
+      end
+      r[name]=e
+
+
+      p=readPointer(p+UEngine.FProperty.PropertyLinkNext)
+    end
+
+    return r
+  else
+    return nil,'No propertylink found'
+  end
+end
+
+
+function getSuperListFromField(FieldAddress)
+  if isVTable(readPointer(FieldAddress)) then
+    local Names={}
+
+    local nameindex=readQword(FieldAddress+UEngine.FField.Name)
+    local name=UEngine.IndexToName[nameindex]
+    if name then
+      local class=readPointer(FieldAddress+UEngine.FField.Class)
+      while class and class~=0 do
+        nameindex=readQword(class+UEngine.FFieldClass.Name)
+        if nameindex==nil then return nil end
+
+        name=UEngine.IndexToName[nameindex]
+        if name==nil then return nil end
+
+        table.insert(Names,name)
+
+        class=readPointer(class+UEngine.FFieldClass.SuperClass)
+      end
+
+      return Names
+    end
+  end
+end
+
+function testIfSuperStructOffset(classAddress, offset)
+  local depth=0
+  local super={}
+  local class=readPointer(classAddress+offset)
+  while class and (class~=0) do
+    local n=UObject_getName(class)
+    if n then
+      table.insert(super, n)
+    else
+      return nil --a bad classname
+    end
+
+    local newclass=readPointer(class+offset)
+    if newclass==class then return nil end --points to itself (found Class, needed SuperClass)
+
+    class=newclass
+    depth=depth+1
+
+    if depth>20 then return nil end --endless loop
+  end
+
+  return super
+end
+
+
+function getSuperListFromObject(ObjectAddress)
+  --get the class
+  local super={}
+  local class=readPointer(ObjectAddress+UEngine.UObject.Class)
+  while class and class~=0 do
+    local n=UObject_getName(class)
+      if n then table.insert(super, n)
+    else
+      return nil --a bad classname
+    end
+
+    class=readPointer(class+UEngine.UClass.SuperStruct)
+  end
+
+  return super
+end
+
+function GetLinkedListSize(p,LinkOffset)
+  local c=0
+
+  repeat
+    p=readPointer(p+LinkOffset)
+    if p and p~=nil and p~=0 then
+      c=c+1
+    end
+  until p==nil or p==0 or c>100000
+  return c
+end
+
+function UEngine_findStructureStart(address)
+  address=address & 0xfffffffffffffff0
+
+
+
+  c=0
+  while c<100 do
+    local p=readPointer(address)
+    if p==nil then
+      return nil,'encountered unreadable memory'
+    end
+
+    if isVTable(p) then
+      return address
+    end
+    address=address-8
+    c=c+1
+  end
+end
+
+function findGameInstanceFPropertyAndFields(t)
+--note: in older UE games a property is an UObject
+  if not UEngine.UGameEngine then return nil,'Find UGameEngine and GameEngineClass first' end
+  if not UEngine.GameEngineClass then return nil,'Find the GameEngineClass first' end
+
+  local index=UEngine.NameToIndex['GameInstance']
+  local ms=createMemScan() --todo: make aobscanarrays (multiple) allow multiple results
+  ms.VarType=vtQword
+  ms.ScanValue=index
+  ms.Fastscanmethod=fsmAligned
+  ms.Fastscanparameter=4
+
+  ms.scan()
+
+  local r=ms.Results
+  local errstr=ms.ErrorString
+  ms.destroy()
+  ms=nil
+
+  if errstr~='' then
+    return nil,errstr
+  end
+
+  if #r==0 then
+    return nil,'Failure finding references to the GameInstance FProperty'
+  end
+
+
+  local goodrangestart=getAddress(process)
+  local goodrangestop=getAddress(process)+getModuleSize(process)
+
+  local bases={}
+  local nameoffsets={} --to verify
+  for i=1,#r do
+    --find the structure start of each result, if possible (look up to 10 pointers back for a vtable, but keep in mind there can be more)
+
+    local base=UEngine_findStructureStart(r[i]) --scan for a vftable. a vftable is a pointer to a list in the module, and each pointer in that list is a pointer to an executable address (doesn't have to be .text)
+    if base then
+      table.insert(bases,base)
+      table.insert(nameoffsets,r[1]-base)
+    end
+  end
+
+  --now scan these bases for a pointer to GameEngineClass. Likely the offset will be close to the base as it's also in FField (lowest offset wins if multiple matches)
+  local FPropertyOwnerOffset
+  local GameInstanceFProperty
+  for i=1,#bases do
+
+    for j=1,32 do
+      if readPointer(bases[i]+j*8) & 0xfffffffffffffff0==UEngine.GameEngineClass then --ue 4.26 and 5 (UE5 used the lowest bits to set if it's an Object or Field, 4.26 used a byte with padding.
+        if FPropertyOwnerOffset then
+          if FPropertyOwnerOffset>j*8 then
+            FPropertyOwnerOffset=j*8
+            GameInstanceFProperty=bases[i]
+          end
+        else
+          FPropertyOwnerOffset=j*8
+          GameInstanceFProperty=bases[i]
+        end
+        break
+      end
+    end
+  end
+
+  if GameInstanceFProperty then
+    --found it!
+    --parse it for some useful stuff
+    UEngine.FProperty={}
+    UEngine.FProperty.Owner=FPropertyOwnerOffset
+
+    local potentialPropertyLists={} --FProperties have multiple lists
+
+    for i=1,64 do
+
+
+      local p=GameInstanceFProperty+i*4
+
+
+
+      local pp=readPointer(p)
+      local pi=pp & 0xffffffff
+
+      if isVTable(pp) then
+        break --another object starts here
+      end
+
+
+
+      if UEngine.FProperty.Name==nil then
+        if pi==index then
+          UEngine.FProperty.Name=i*4
+        end
+      end
+
+      if (UEngine.FProperty.Offset==nil) and (pi>8) and (pi<0x9000) and ((pi & 7) == 0) then   --could be an offset to GameInstance
+        local potentialGameInstanceObject=readPointer(UEngine.UGameEngine+pi)
+        local name=UObject_getName(potentialGameInstanceObject)
+        if name then
+           --at least it has a name, check if it inherits from GameInstance
+           local superlist=getSuperListFromObject(potentialGameInstanceObject)
+           if superlist then
+             for j=1,#superlist do
+               if superlist[j]=='GameInstance' then
+                 UEngine.FProperty.Offset=i*4
+               end
+             end
+           end
+        end
+      end
+
+      if (i & 0x1==0) and (pp & 0x7==0) then --pointer alignment
+
+
+        if UEngine.FProperty.Class==nil then --check if it's a FObjectProperty Class
+
+          --scan it for a name ending with Property (spoiler, it's ObjectProperty)
+          for j=0,16 do
+            local v=readQword(pp+j*4)
+            local n=UEngine.IndexToName[v]
+
+            if n then
+              if n:endsWith('Property') then
+                UEngine.FProperty.Class=i*4 --handy for validating future FProperties
+                UEngine.FFieldClass={}
+                UEngine.FFieldClass.Name=j*4
+                break
+              end
+            end
+          end
+
+          if UEngine.FProperty.Class and UEngine.FFieldClass.Name then --found the class just not.
+            --find SuperClass in FFieldClass (SuperClass is the same type as FFieldClass, so name is in the same spot)
+            local pf=readPointer(GameInstanceFProperty+UEngine.FProperty.Class)
+            for j=0,16 do
+              local v=readPointer(pf+j*8)
+              if v then
+                local v2=ReadQword(v+UEngine.FFieldClass.Name)
+                if v2 then
+                  local name=UEngine.IndexToName[v2]
+                  if name and (name:endsWith('Property') or name:endsWith('PropertyBase') or name=='Field') then
+                    UEngine.FFieldClass.SuperClass=j*8 --found it
+                    break
+                  end
+                end
+              end
+            end
+          end
+        end
+        table.insert(potentialPropertyLists, i*4) --to be checked against name, and propertyclass later
+      end
+    end
+
+
+    if UEngine.FProperty and UEngine.FFieldClass and UEngine.FFieldClass.Name and UEngine.FProperty.Class and UEngine.FProperty.Name and UEngine.FProperty.Owner then
+      --now process the potentialPropertyLists. We have enough FProperty field info to determine if it's validish or not.  Some of them are meh, and some of them contain everything including super class properties
+      --...
+      UEngine.FField={}
+      UEngine.FField.Class=UEngine.FProperty.Class
+      UEngine.FField.Owner=UEngine.FProperty.Owner
+      UEngine.FField.Name=UEngine.FProperty.Name
+
+
+
+      local PropertyLinkNextOffset
+      local BestPropertyCount
+
+      for i=1,#potentialPropertyLists do
+        --scan, but stop when a vtable is encountered (most properties are allocated next to eachother)
+        local p=readPointer(GameInstanceFProperty+potentialPropertyLists[i])
+
+        local superlist=getSuperListFromField(p) --handle P as a field
+
+
+        --UE5 : Property->Field (Done)
+        --UE4 : Property->Field->Object
+        if superlist and (
+                          ((#superlist>=2) and (superlist[#superlist]=='Field') and (superlist[#superlist-1]=='Property'))
+                          or
+                          ((#superlist>=3) and (superlist[#superlist]=='Object') and (superlist[#superlist-1]=='Field') and (superlist[#superlist-2]=='Property'))
+                          )
+        then
+          local c=GetLinkedListSize(GameInstanceFProperty, potentialPropertyLists[i])
+          if PropertyLinkNextOffset==nil or c>BestPropertyCount then
+            PropertyLinkNextOffset=potentialPropertyLists[i]
+            BestPropertyCount=c
+          end
+        end
+      end
+      UEngine.FProperty.PropertyLinkNext=PropertyLinkNextOffset
+
+      --scan the GameEngineClass for properties  (todo: maybe also add a few others)
+      local PropertyLinkOffset
+      BestPropertyCount=0
+      local altoffset
+      for i=1,100 do
+        local p=readPointer(GameEngineClass+i*8)
+
+
+        if isVTable(p) then break end
+
+        local superlist=getSuperListFromField(p)
+        if superlist and (
+                          ((#superlist>=2) and (superlist[#superlist]=='Field') and (superlist[#superlist-1]=='Property'))
+                          or
+                          ((#superlist>=3) and (superlist[#superlist]=='Object') and (superlist[#superlist-1]=='Field') and (superlist[#superlist-2]=='Property'))
+                          )
+        then
+          local c=GetLinkedListSize(p, UEngine.FProperty.PropertyLinkNext)
+          if PropertyLinkOffset==nil or c>=BestPropertyCount then
+            altoffset=PropertyLinkOffset
+            PropertyLinkOffset=i*8
+            BestPropertyCount=c
+          end
+        end
+      end
+
+      UEngine.UClass.PropertyLink=PropertyLinkOffset
+      UEngine.UClass.PropertyLinkAlt=altoffset
+
+      --find some property specific info (Property size field, and for BoolProperty the bitfields (01 00 bitmask bitmask for properties that have the same offset)
+      local gameEngineProperties=UClass_enumProperties(GameEngineClass)
+      local sizes={}
+      sizes[1]={}
+      sizes[4]={}
+      sizes[8]={}
+      local bools={}
+
+      for name, info in pairs(gameEngineProperties) do
+        if info.propertyType=='FloatProperty' then
+          if #sizes[4]<10 then
+            table.insert(sizes[4],info.propertyAddress)
+          end
+        elseif info.propertyType=='IntProperty' then
+          if #sizes[4]<10 then
+            table.insert(sizes[4],info.propertyAddress)
+          end
+        elseif info.propertyType=='ObjectProperty' then
+          if #sizes[8]<10 then
+            table.insert(sizes[8],info.propertyAddress)
+          end
+        elseif info.propertyType=='ClassProperty' then
+          if #sizes[8]<10 then
+            table.insert(sizes[8],info.propertyAddress)
+          end
+        elseif info.propertyType=='BoolProperty' then
+          if #sizes[1]<10 then
+            table.insert(sizes[1],info.propertyAddress)
+          end
+
+          if bools[info.offset]==nil then
+            bools[info.offset]={}
+          end
+
+          table.insert(bools[info.offset], info.propertyAddress)
+        end
+      end
+
+
+      for i=2,64 do
+        local foundsize=true
+        for size,addresslist in pairs(sizes) do
+          for j=1,#addresslist do
+            if readInteger(addresslist[j]+i*4)~=size then
+              foundsize=false
+              break
+            end
+          end
+          if foundsize==false then break end
+        end
+
+        if foundsize then
+          UEngine.FProperty.Size=i*4
+          break
+        end
+      end
+
+      --now try to find the bitfields
+      local multibitfields={}
+      local couldbefullbyte=false
+      for offset,addresslist in pairs(bools) do
+        if #addresslist>1 then
+          table.insert(multibitfields,addresslist)  --guaranteed to have 1 bit sized entries
+        end
+      end
+
+      if #multibitfields==0 then
+        --bah, it's all single bit fields... Just use these then
+        couldbefullbyte=true
+        for offset,addresslist in pairs(bools) do
+          table.insert(multibitfields,addresslist)
+        end
+      end
+
+      local startIndex=UEngine.FProperty.PropertyLinkNext // 8+1 --it starts after the normal property definition  (
+
+      local isSingleBit={}
+      isSingleBit[1]=true
+      isSingleBit[2]=true
+      isSingleBit[4]=true
+      isSingleBit[8]=true
+      isSingleBit[16]=true
+      isSingleBit[32]=true
+      isSingleBit[64]=true
+      isSingleBit[128]=true
+
+      for i=startIndex,64 do
+        local foundbitmaskfield=true
+        for j=1,#multibitfields do
+          for k=1,#multibitfields[j] do
+            local v=readInteger(multibitfields[j][k]+i*4)
+            local b1=v & 0xff
+            if b1~=1 then
+              foundbitmaskfield=false
+              break
+            end
+
+            local b2=(v >> 8) & 0xff
+            if b2~=0 then
+              foundbitmaskfield=false
+              break
+            end
+
+            local b3=(v >> 16) & 0xff;
+            if not isSingleBit[b3] then
+              if (couldbefullbyte==false) or (b3~=0xff) then
+                foundbitmaskfield=false
+                break
+              end
+            end
+
+            local b4=(v >> 24) & 0xff;
+            if not isSingleBit[b4] then
+              if (couldbefullbyte==false) or (b4~=0xff) then
+                foundbitmaskfield=false
+                break
+              end
+            end
+          end
+          if foundbitmaskfield==false then break end
+        end
+        if foundbitmaskfield then
+          UEngine.FProperty.BitMaskField=i*4
+          UEngine.FProperty.ObjectClassType=i*4 --same offset  (e.g ObjectClassType for the property GameInstance is a pointer to the GameInstanceClass
+          break
+        end
+      end
+
+      --Obtained everything needed
+
+      return true, 'success'
+    else
+      return nil,'Not all needed fields where found'
+    end
+
+
+
+  else
+    return nil, 'Failed finding GameInstanceFProperty'
+  end
+
+  return nil,'huh?'
+
+end
+
+
+
+function FindGEngine(t)
+--some options: Parse the whole object table , or signature scan. Trying the sigscan method first as it can be done without injection
+
+  if UEngine.UObject.Name==nil then
+    return nil,'UEngine.UObject.Name==nil'
+  end
+  local index=UEngine.NameToIndex['GameEngine']
+
+  local altindex=UEngine.NameToIndex['OakGameEngine'] --alternate option (inherits from gameengine)
+
+  if index==nil then return false, "failure finding GameEngine string" end
+
+  local ms=createMemScan()
+
+  local start,stop
+  mstart=getAddress(process)
+  mstop=mstart+getModuleSize(process)
+
+  ms.VarType=vtGrouped
+  ms.Fastscanmethod=fsmAligned
+  ms.Fastscanparameter=8
+
+--  ms.Scanvalue='p:S w:'..(UObject.Name-8)..' 4:'..NameToIndex['OakGameEngine']
+  --ms.Scanvalue='p:S w:'..(UObject.Name-8)..' 4:'..NameToIndex['GameEngine']
+  --doing a range scan is faster that a p:S scan
+  ms.Scanvalue='8r:'..mstart..'-'..mstop..' w:'..(UEngine.UObject.Name-8)..' 4:'..UEngine.NameToIndex['GameEngine']
+  ms.ScanWritable='scanInclude'
+  ms.ScanExecutable='scanExclude'
+  ms.ScanCopyOnWrite='scanExclude'
+
+  ms.scan()
+  ms.waitTillDone()
+
+  sleep(1000)
+
+  ms.nextScan()
+
+  local r=ms.Results
+  local r2
+
+  if t and t.terminated then return nil end
+
+
+  ms.destroy()
+  ms=nil
+
+
+  if #r>=1 then
+    r2={}
+    for i=1,#r do
+      if isVTable(readPointer(r[i])) then
+        --todo: check classname for the name 'GameEngine' which itself has a classname of 'Class'  (or the Superclasses named Engine->Object->nil pointer
+        --still here
+        table.insert(r2,r[i])
+      end
+
+    end
+  end
+
+  if #r2>1 then
+    return nil,'FindGEngine needs more refining'
+  end
+
+  r={}
+  for i=1,#r2 do
+    --the instantiated GEngine has a number for the name
+    if readInteger(r2[i]+UEngine.UObject.Name+4)~=0 then table.insert(r,r2[i]) end
+  end
+
+  if #r==0 then
+
+    --no instance found, maybe it created a subclass
+    if #r2>=1 then
+      for gei=1,#r2 do
+        local PotentialGameEngineClass=r2[gei]
+
+        --there is GameEngine , likely a GameEngine Class (Confirm by checking the class pointer name to be 'Class')
+        --printf("subclass situation")
+        local ClassClass=readPointer(r2[1]+UEngine.UObject.Class) --should be the default 'Class' Object
+
+        if isVTable(readPointer(ClassClass))==false then
+          goto continue
+          --return nil,'Invalid ClassClass'
+        end
+
+        local ClassClassName=UObject_getName(ClassClass)
+        if ClassClassName~='Class' then
+          goto continue
+          --return nil,'ClassClass type is not a class'
+        end
+
+        --still here, so this is indeed the gameengine class
+        --find the superclass pointer which has the name "Engine" (need to know the offset for the scan already)
+
+        if UEngine.UClass==nil then
+          UEngine.UClass={}
+        end
+
+        UEngine.UClass.Name=UEngine.UObject.Name
+        UEngine.UClass.Class=UEngine.UObject.Class
+        for i=1,32 do
+          local n=UObject_getName(readPointer(PotentialGameEngineClass+i*8))  --0x40 in borderlands 4
+          if n=='Engine' then
+            --found the superstruct
+            UEngine.UClass.SuperStruct=i*8
+            break
+          end
+        end
+
+        --find the class that has the GameEngineClass as it's superstruct
+        if UEngine.UClass.SuperStruct==nil then
+          goto continue
+  --        return nil,'UClass.SuperStruct==nil'
+        end
+
+        local ms=createMemScan()
+        ms.VarType=vtGrouped
+        ms.Fastscanmethod=fsmAligned
+        ms.Fastscanparameter=8
+
+        --build a scanstring
+        local sv='BA:8 8r:'..mstart..'-'..mstop
+        local offset=8
+        if UEngine.UClass.Class<UEngine.UClass.SuperStruct then
+          sv=sv..' w:'..UEngine.UClass.Class-offset..' 8:'..ClassClass
+          offset=UEngine.UClass.Class+8
+          sv=sv..' w:'..UEngine.UClass.SuperStruct-offset..' 8:'..PotentialGameEngineClass
+        else --it theoretically 'could' happen with enough customization fuckery
+          sv=sv..' w:'..UEngine.UClass.SuperStruct-offset..' 8:'..PotentialGameEngineClass
+          offset=UEngine.UClass.SuperStruct+8
+          sv=sv..' w:'..UEngine.UClass.Class-offset..' 8:'..ClassClass
+        end
+
+        ms.Scanvalue=sv --'p:S w:'..(UClass.SuperStruct-8)..' 8:'..PotentialGameEngineClass
+        ms.ScanWritable='scanInclude'
+        ms.ScanExecutable='scanExclude'
+        ms.ScanCopyOnWrite='scanExclude'
+
+        ms.scan()
+        ms.waitTillDone()
+        ms.nextScan()
+
+        r=ms.Results
+        ms.destroy() ms=nil
+
+        local found=false
+
+        --all potential classes that have inherited from GameEngine (likely just 1)
+        for i=1,#r do
+          --find all objects that have this as class  --todo: may have to go deeper (in which case an object enum might be faster)
+
+          local ms=createMemScan()
+          ms.VarType=vtGrouped
+          ms.Fastscanmethod=fsmAligned
+          ms.Fastscanparameter=8
+
+          ms.Scanvalue='BA:8 8r:'..mstart..'-'..mstop..' w:'..(UEngine.UClass.Class-8)..' 8:'..r[i] --the address of the class at the class offset.
+          ms.ScanWritable='scanInclude'
+          ms.ScanExecutable='scanExclude'
+          ms.ScanCopyOnWrite='scanExclude'
+
+          ms.scan()
+          r2=ms.Results
+          ms.destroy() ms=nil
+
+          r3={}
+          for j=1,#r2 do
+            --check if the name number if set
+            --the instantiated GEngine has a number for the name
+            if readInteger(r2[j]+UEngine.UObject.Name+4)~=0 then table.insert(r3,r2[j]) end
+          end
+
+          if #r3>0 then
+            r=r3
+            found=true
+
+            GameEngineClass=PotentialGameEngineClass
+            break
+          end
+        end
+
+        if found then
+
+          break
+        end
+
+        ::continue::
+      end
+
+    else
+      return false,'No GameEngine found'
+    end
+
+  end
+
+  if #r==0 then
+    return nil,'No GameEngine instance found'
+  end
+
+
+  UEngine.UGameEngine=r[1]
+  --GameEngine is found , lets try to find GEngine while we're (handy when the game restarts)
+
+  ms=createMemScan()
+  ms.VarType=vtQword
+  ms.ScanValue=UEngine.UGameEngine
+  ms.Startaddress=getAddress(process)
+  ms.Stopaddress=getAddress(process)+getModuleSize(process)
+  ms.scan()
+  r=ms.Results
+  if #r==1 then
+    UEngine.GEngine=r[1]
+    unregisterSymbol('GEngine')
+    registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine))
+  end
+
+  ms.destroy()
+
+  return true
+end
+
+function isInExecutableMainModuleMemory(address)
+  if UEngine.ExecutableRanges==nil then
+    UEngine.ExecutableRanges={}
+
+    --alternatively, I could init the range by using the first UObjectList's first pointer and follow it to a executable code. Works for each list type as the first item is always a pointer
+
+    if UEngine.VFTableInExecutableMemoryMethod==nil or UEngine.VFTableInExecutableMemoryMethod==2  then
+      --method 1/nil: First executable code section
+      --method 2: All executable code sections
+      local sections=enumSectionsOfModule(process)
+      --find the first executable section
+
+      for i=1,#sections do
+        if sections[i].IsCode and sections[i].IsExecutable then
+          local e={}
+          e.start=sections[i].Address
+          e.stop=sections[i].Address+sections[i].Size
+          table.insert(UEngine.ExecutableRanges,e)
+
+          if UEngine.VFTableInExecutableMemoryMethod==nil then
+            break
+          end
+        end
+      end
+    end
+
+
+    if #UEngine.ExecutableRanges==0 then
+      --worst case scenario
+      local goodrangestart=getAddress(process)
+      local goodrangestop=getAddress(process)+getModuleSize(process)
+
+      local executablePageProtect={}
+
+      UEngine.ExecutableRanges[PAGE_EXECUTE]=true
+      UEngine.ExecutableRanges[PAGE_EXECUTE_READ]=true
+      UEngine.ExecutableRanges[PAGE_EXECUTE_READWRITE]=true
+      UEngine.ExecutableRanges[PAGE_EXECUTE_WRITECOPY]=true
+
+      local mr=enumMemoryRegions()
+      for i=1,#mr do
+        if executablePageProtect[mr[i].Protect] and (mr[i].BaseAddress>=goodrangestart) and (mr[i].BaseAddress+mr[i].RegionSize<goodrangestop) then
+          local e={}
+          e.start=mr[i].BaseAddress
+          e.stop=mr[i].BaseAddress+mr[i].RegionSize
+          table.insert(UEngine.ExecutableRanges,e)
+        end
+      end
+    end
+  end
+
+  local er=UEngine.ExecutableRanges
+
+  for i=1,#er do
+    if address>er[i].start and address<er[i].stop then
+      return true
+    end
+  end
+
+  return false
+end
+
+function isVTable(address)
+  if address==nil then return nil,'invalid address' end
+  local goodrangestart=getAddress(process)
+  local goodrangestop=getAddress(process)+getModuleSize(process)
+
+
+
+  if address>goodrangestart and address<goodrangestop then
+    --check if it's a list of pointers to functions
+    for i=0,8 do
+      local p=readPointer(address+i*8)
+      if isInExecutableMainModuleMemory(p)==false then
+        return false
+      end
+    end
+
+    return true
+  else
+    return false;
+  end
+
+end
+
+
+function InitializeUObjectArray_Verifier_Type()
+  if UObjectArray_Verifier_Type then
+    UObjectArray_Verifier_Type.destroy()
+  end
+  UObjectArray_Verifier_Type=getCustomType('UObjectArray Verifier Type')
+  if UObjectArray_Verifier_Type then
+    UObjectArray_Verifier_Type.destroy()
+  end
+  UObjectArray_Verifier_Type=nil
+
+
+
+  UObjectArray_Verifier_Type,emsg=registerCustomTypeAutoAssembler([[{$c}
+
+//returns 1 if the type matches
+char TypeName[]="UObjectArray Verifier Type";
+int ByteSize=16;
+char CallMethod=1; //cdecl
+
+int PreferedAlignment=0x10;
+
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef struct
+{
+  int val1;
+  int val2;
+  int val3;
+  int zero;
+} *pdata;
+
+__cdecl size_t ConvertRoutine(pdata data, unsigned long long address)
+{
+  int r=1;
+  //if (data->val1<100) return 0; //no tiny games
+  if (data->zero) return 0;
+  if (data->val3!=data->val1) return 0;
+  if ((data->val2) != ((data->val1)-1)) return 0;
+
+  //still here
+  return 1;
+}
+
+__cdecl void ConvertBackRoutine(size_t input, unsigned long long address, unsigned char *output)
+{
+  //nope
+}
+
+{$asm}]])
+  if UObjectArray_Verifier_Type==nil and emsg then
+    error(emsg)
+  end
+end
+
+function FindObjectArray(t) --and UObject name offset
+
+  --for 4.26 >
+
+  if UObjectArray_Verifier_Type==nil then
+    InitializeUObjectArray_Verifier_Type()
+
+    if UObjectArray_Verifier_Type==nil then
+      return nil,'No verifier type'
+    end
+  end
+
+  local ms=createMemScan()
+  ms.VarType=vtGrouped --custom type only also works
+  ms.Fastscanmethod=fsmAligned
+  ms.Fastscanparameter=10
+
+  ms.Scanvalue='BA:8 c(UObjectArray Verifier Type):1 p:D'
+  ms.Startaddress=getAddress(process)
+  ms.Stopaddress=getAddress(process)+getModuleSize(process)
+  ms.scan()
+  ms.waitTillDone()
+  local r=ms.Results
+
+  local errorstring=ms.ErrorString
+  ms.destroy()
+  ms=nil
+
+  if t and t.Terminated then return false, 'UEInfoScannerThread terminated' end
+
+
+  if #r==0 then
+    return false,'Failed finding anything ('..errorstring..')'
+  end
+
+  if #r>1 then
+    local r2={}
+    --find the ones with
+    for i=1,#r do
+      if (readInteger(r[i])==0) or (readInteger(r[i])>100) then
+        table.insert(r2,r[i])
+      end
+    end
+
+    r=r2
+    if #r>1 then
+      r2={}
+
+      for i=1,#r do
+        if readInteger(r[i])>100 then
+          table.insert(r2,r[i])
+        end
+      end
+
+      r=r2
+      r2={}
+      --check if the first pointer pointed at is valid (there are currently 2 known types. Both both have a pointer at the first entry)
+      for i=1,#r do
+        local p=readPointer(r[i]+0x10)
+        if p and readPointer(readPointer(p)) then
+          table.insert(r2,r[i])
+        end
+      end
+
+      r=r2
+
+      if #r>1 then
+        --more refining needed. (pick the one with the highest value or a deeper inspection of the array list)
+
+        return false,'Needs more refining',r
+      end
+
+
+    end
+  end
+
+
+  if t and t.Terminated then return false, 'UEInfoScannerThread terminated' end
+
+  if #r==1 then
+    UEngine.ObjectArray=r[1]
+
+    --figure out some stuff
+
+    local p=readPointer(UEngine.ObjectArray+0x10)
+    if p then
+      --get the first block
+      --test what type of list this is. pointer list, or a (huge) list of ObjectArray entries
+
+      if readByte(readPointer(p)) and readByte(readPointer(p+8)) and readByte(readPointer(p+16)) then
+        UEngine.ObjectArrayListType=0 --list of pointers to ObjectArray entries
+        p=readPointer(p) --p now points to the first object array entry
+      else
+        UEngine.ObjectArrayListType=1 --list of ObjectArray entries
+      end
+
+      local goodrangestart=getAddress(process)
+      local goodrangestop=getAddress(process)+getModuleSize(process)
+
+      --find the vtable executable section, take the first pointer (for now assume that the first entry of a structure is a pointer)
+      local sections=enumSectionsOfModule(process)
+
+      local object1=readPointer(p)
+      local vftable=readPointer(object1)
+      local firstfunctionaddress=readPointer(vftable)
+      for i=1,#sections do
+        if firstfunctionaddress>=sections[i].Address and firstfunctionaddress<sections[i].Address+sections[i].Size then
+          if sections[i].IsCode and sections[i].IsExecutable then
+            --valid. Use this as a template for all future vtable rules (if not, then try the other methods described later)
+            UEngine.ExecutableRanges={}
+            UEngine.ExecutableRanges[1]={}
+            UEngine.ExecutableRanges[1].start=sections[i].Address
+            UEngine.ExecutableRanges[1].stop=sections[i].Address+sections[i].Size
+          end
+          break
+        end
+      end
+
+
+      local validpointers={}
+      --figure out the ObjectArray entry size
+      for i=0,32 do
+        local p1=readPointer(p+(i*4)) --scan through the block in chunks of 8
+        local pv=readPointer(p1)
+
+        if isVTable(pv) then --first time relying on isVTable. It can bug out so deal with it if needed
+          --found a valid pointer
+          table.insert(validpointers, (i*4))
+        end
+      end
+
+      if #validpointers==0 then
+        --fallback on all executable code sections
+        UEngine.VFTableInExecutableMemoryMethod=2
+        UEngine.ExecutableRanges=nil
+
+        for i=0,32 do
+          local p1=readPointer(p+(i*4))
+          local pv=readPointer(p1)
+
+          if isVTable(pv) then
+            --found a valid pointer
+            table.insert(validpointers, (i*4))
+          end
+        end
+
+        if #validpointers==0 then
+          --fall back on all executable memory in the module
+          UEngine.VFTableInExecutableMemoryMethod=3
+          UEngine.ExecutableRanges=nil
+
+          for i=0,32 do
+            local p1=readPointer(p+(i*4))
+            local pv=readPointer(p1)
+
+            if isVTable(pv) then --first time relying on isVTable. It can bug out so deal with it if needed
+              --found a valid pointer
+              table.insert(validpointers, (i*4))
+            end
+          end
+        end
+      end
+
+
+      if #validpointers<=1 then
+        return false,"can't find figure out ObjectArrayEntryStruct size"
+      end
+      ObjectArrayEntryStructSize=validpointers[2]-validpointers[1]
+
+
+
+
+
+
+      --try to figure out the name offset now we're here
+
+
+      --if IndexToName[0] and IndexToName[1] and IndexToName[2] then --findValidFNameFieldOffsetsInMemory won't work well here
+        --instead, try to find the pointer to UClass and find the string to class
+        --to find the class pointer find a pointer that points to itself eventually. it's name will be "Class"  (class->class->class->class->....)
+
+        --note: Object0 tends to be /Script/CoreUObject
+      local classPointerOffsetCount={}
+      local nameoffsetcount={}
+
+      local ClassNameIndex=UEngine.NameToIndex['Class']
+      if ClassNameIndex==nil then
+        return false,'There is no Class class'
+      end
+
+      for i=1,#validpointers do
+        local objectaddress=readPointer(p+validpointers[i])
+        for j=1,10 do
+          local ep=readPointer(objectaddress+j*8)
+          local depth=0
+          while depth<20 do
+            local newp=readPointer(ep+j*8)
+            if newp==nil then break end
+
+            if newp==ep then
+              local hasClassIndex=false
+              --possible class pointer found
+              --find the classindex in here
+              for k=2,20 do --+2 to skip the vtable
+                local index=readInteger(ep+k*4)
+                if index==ClassNameIndex then
+                  hasClassIndex=true
+                  if nameoffsetcount[k*4] then
+                    nameoffsetcount[k*4]=nameoffsetcount[k*4]+1
+                  else
+                    nameoffsetcount[k*4]=1
+                  end
+                end
+              end
+
+              if hasClassIndex then
+                if classPointerOffsetCount[j*8] then
+                  classPointerOffsetCount[j*8]=classPointerOffsetCount[j*8]+1
+                else
+                  classPointerOffsetCount[j*8]=1
+                end
+              end
+
+
+
+              break
+            end
+            ep=newp
+            depth=depth+1
+          end
+        end
+      end
+
+      local highestcount=0
+      local bestoffset=nil
+
+      for offset,count in pairs(classPointerOffsetCount) do
+        if count>highestcount then
+          bestoffset=offset
+          highestcount=count
+        end
+      end
+
+      UEngine.UObject={}
+
+      UEngine.UObject.Class=bestoffset
+
+      highestcount=0
+      bestoffset=nil
+
+      for offset,count in pairs(nameoffsetcount) do
+        if count>highestcount then
+          bestoffset=offset
+          highestcount=count
+        end
+      end
+
+      UEngine.UObject.Name=bestoffset
+    end
+
+    return true
+  end
+end
+
+function SetupNamePoolLookupType()
+  --handy for structure dissect
+  if getCustomType('UE FName to String')==nil then
+    local function customvaluetype2_bytestovalue(b1,b2,b3,b4,b5,b6,b7,b8,address)
+      local v1
+      v1=(b4 << 24) + (b3<<16) + (b2 << 8) + b1
+      v2=(b8 << 24) + (b7<<16) + (b6 << 8) + b5
+      if UEngine and UEngine.IndexToName then
+        local n=UEngine.IndexToName[v1]
+        if n==nil then
+          n='<noname>'
+        end
+
+        if v2>0 then
+          return string.format("%s_%d",n,v2)
+        else
+          return n
+        end
+      else
+        return 'noindex'
+      end
+    end
+
+    local function customvaluetype2_valuetobytes(i,address)
+      --maybe use StringToFName, but for now I see no reason for this
+    end
+
+    synchronize(function()
+      registerCustomTypeLua('UE FName to String',8,customvaluetype2_bytestovalue, customvaluetype2_valuetobytes, false,true )
+    end)
+  end
+end
+
+
+function CacheNamePool_old()
+  if NamePoolData_index_hash_string==nil then return nil,'NamePoolData_index_hash_string not defined yet' end
+
+
+  local N2I={}
+  local I2N={}
+
+  --copy and parse all the strings
+
+  --each block is 0x20000 bytes long
+  --NamePool+0x8 holds a 4 byte with the count. Alternatively, the list ends with a NULL pointer
+  local sdata=createMemoryStream()
+  sdata.Size=0x20000
+
+  local count=1000
+
+
+  local pointerlist=createMemoryStream()
+  pointerlist.Size=8*count
+  if copyMemory(NamePoolData_index_hash_string,pointerlist.Size, pointerlist.Memory,1)==nil then return nil,'Read Failed' end
+
+
+  local stringCache={} --read blocks of 0x40000 bytes (index is address >> 17)
+  local StringOffset=FNameEntry.String
+
+  for i=1,count do
+    local p=pointerlist.readQword()
+    if p==0 then break end
+
+    sdata.Position=0
+     --entrystart is always aligned on a 2 byte boundary.
+    if copyMemory(p,sdata.Size, sdata.Memory,1) then
+      for j=0,16383 do
+        --list of pointers, some can be 0
+        local p2=sdata.readQword()
+
+        if p2==nil then break end
+        if p2~=0 then
+
+
+
+          --get the memory p+StringOffset points to
+          local Base=p2&0xFFFFFFFFFFFF0000 --allocation granularity of windows
+          local cache=stringCache[Base]
+
+          if cache==nil then
+            cache=createMemoryStream()
+
+            local meminfo=getMemoryRegionInfo(Base)
+            if meminfo and meminfo.State==4096 then --4096 is commited memory
+              while meminfo.RegionSize<0x10000+0x100 do --0x100 for overlap
+                local n=getMemoryRegionInfo(meminfo.BaseAddress+meminfo.RegionSize)
+                if n and n.State==4096 then
+                  meminfo.RegionSize=meminfo.RegionSize+n.RegionSize
+                else
+                  break
+                end
+              end
+
+              if meminfo.RegionSize>0x10000+0x100 then
+                meminfo.RegionSize=0x10000+0x100
+              end
+
+              cache.Size=meminfo.RegionSize
+
+              if copyMemory(Base,meminfo.RegionSize, cache.Memory,1)==nil then
+                cache.Size=0
+              end
+
+            end
+
+            stringCache[Base]=cache --c.size==0 is unreadable
+          end
+
+
+
+          local pindex=p2-Base+StringOffset
+          local sizeleft=cache.Size-pindex
+          local str
+          if sizeleft>0 then
+            cache.position=pindex
+            str=cache.readString(math.min(100,sizeleft))
+          end
+
+          if str then
+            local index=(i-1)*16384+j
+
+            N2I[str]=index
+            I2N[index]=str
+          end
+
+        end
+      end
+    end
+
+   -- print("done")
+
+    for base,ms in pairs(stringCache) do
+      if ms then
+        ms.destroy()
+      end
+    end
+
+    stringCache={}
+
+   -- printf("namelookupprogress=%.2f",namelookupprogress)
+  end
+
+  pointerlist.destroy()
+
+  sdata.destroy()
+
+  UEngine.NameToIndex=N2I
+  UEngine.IndexToName=I2N
+
+  return true
+
+end
+
+function CacheNamePool(t)
+  --remember the comment at the top about debugging causing a slowdown?  That particularly means this function right here
+
+  if UEngine.NamePoolData==nil then
+    return false, 'CacheNamePool: UEngine.NamePoolData is still undefined'
+  end
+  SetupNamePoolLookupType()
+
+  if UEngine.NamePoolData_old then
+    return CacheNamePool_old(t)
+  end
+
+
+  local N2I={}
+  local I2N={}
+
+  --copy and parse all the strings
+
+  --each block is 0x20000 bytes long
+  --NamePool+0x8 holds a 4 byte with the count. Alternatively, the list ends with a NULL pointer
+  local sdata=createMemoryStream()
+  sdata.Size=0x20000
+
+  local count=readInteger(UEngine.NamePoolData+8)
+  if count==0 then count=1000 end
+
+
+  local pointerlist=createMemoryStream()
+  pointerlist.Size=8*count
+  if copyMemory(UEngine.NamePoolData+0x10,pointerlist.Size, pointerlist.Memory,1)==nil then return nil,'Read Failed' end
+
+  for i=1,count do
+    if t and t.Terminated then
+      sdata.destroy()
+      pointerlist.destroy()
+      return false, 'UEInfoScannerThread terminated'
+    end
+
+    local p=pointerlist.readQword()
+    if p==0 then break end
+
+    sdata.Position=0
+     --entrystart is always aligned on a 2 byte boundary.
+    if copyMemory(p,sdata.Size, sdata.Memory,1) then
+      while sdata.Position<sdata.Size do
+        local entrystart=sdata.Position >> 1
+
+        local header=sdata.readWord()
+        local iswide=header & 1==1
+        local len=header >> 6
+
+        if len==0 then break end
+
+        local str
+        if iswide then
+          str=sdata.readWideString(len)
+        else
+          str=sdata.readString(len)
+        end
+
+        local index=((i-1) << 16)+entrystart
+
+        N2I[str]=index
+        I2N[index]=str
+
+        --symcount=symcount+1
+
+        if (sdata.Position & 1) == 1 then sdata.readByte() end --align
+      end
+
+    else
+      print("Failure reading strings")
+    end
+  end
+
+  pointerlist.destroy()
+
+  sdata.destroy()
+
+  UEngine.NameToIndex=N2I
+  UEngine.IndexToName=I2N
+
+
+  return true
+end
+
+
+
+function FindNamePoolData_older(t)
+  --[[
+  e.g 4.19: The occupation
+  FNameEntry is formatted as : index, FNameEntry (hash?), ascii string (None, ByteProperty, InrProperty, BoolProperty,...)
+  Each FnameEntry is pointed at by another block of memory of 0x20000 bytes (16384 pointers) to each individual string
+  and that list itself is pointed at by another one , which has a pointer to it from a memory addres in the game (Call it GNames)
+
+  example:
+     2454CB90000 = 0, pointer, "None"
+     2454CB90018 = 2, pointer, "ByteProperty"
+
+     apparently if the first bit is 1 the string is a WideString (rare)
+
+     address 2454B600000 holds 0x20000 bytes, all pointers. The first pointer points to 2454CB90000. There can be null pointers in that memory block
+
+     address 2454B5F0080 holds some(9 in this case) pointers as well. First pointer is 2454B600000  (block[0]=2454B600000, block[1]=2454B600008, block[2]=2454B600010)
+
+
+     Secondary for next run optimization:
+     There are 2 static pointers to 2454B5F0080
+     First one: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "80 00 5F 4B 45 02 00 00" 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 3A A7 67 45 02 00 00 0A 00 00 00 18 00 00 00
+     Second one:00 00 00 00 00 00 00 00 00 00 00 00 88 00 00 80 "80 00 5F 4B 45 02 00 00" 40 00 5E 4B 45 02 00 00 01 00 00 00 00 00 00 00 09 00 00 80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 36 D6 F6 7F 00 00 E3 36 EA 41 00 00 01 00 98 EF 1B D8 F6 7F 00 00
+
+
+
+
+  --]]
+
+  if UEngine.NamePoolData then return true end
+
+
+  UEngine.NamePoolData_old=true --todo: if more than 2 formats, change it to an identifier number
+
+  local ms=createMemScan()
+  ms.VarType=vtGrouped
+  ms.Scanvalue=[[BA:4096 BS:128 OOO:U 1:* s:'None' s:'ByteProperty']]
+  ms.scan()
+  firststringblock=ms.Results
+  ms.destroy()
+
+  if t and t.Terminated then
+    return false,'UEInfoScannerThread terminated'
+  end
+
+  if #firststringblock==0 then
+    return false,'No known stringpool found'
+  end
+
+  if #firststringblock>1 then
+    return false,'FindNamePoolData_older needs more refining'
+  end
+
+  --check the format
+  UEngine.FNameEntry={}
+
+  local a=firststringblock[1]
+  for i=0,128 do
+    if readString(a+i,4)=='None' then --find the first string offset
+      UEngine.FNameEntry.String=i
+      break
+    end
+  end
+
+  --find a pointer to this table (The pointer is not located in static memory)
+  ms=createMemScan()
+  ms.VarType=vtQword
+  ms.ScanValue=a
+  ms.FastScanMethod=fsmLastDigits
+  ms.FastScanparameter='0000'  --the first pointer of a 0x20000 bytes long block, alliged
+  ms.scan()
+
+  local r=ms.Results
+  ms.destroy()
+
+  if t and t.Terminated then
+    return false,'UEInfoScannerThread terminated'
+  end
+
+
+
+  if #r==0 then return nil,'no list found' end
+  if #r>1 then return nil,'needs more refining' end
+
+  --check for a pointer to this address.  Normally aligned.  todo: if more than 1 result, check the following pointers if they point to other blocks of 0x20000 bytes all pointing to a FNameEntry or null
+  ms=createMemScan()
+  ms.VarType=vtQword
+  ms.ScanValue=r[1]
+  ms.FastScanMethod=fsmAligned
+  ms.FastScanparameter='8'  --the first pointer of a 0x20000 bytes long block, alliged
+  ms.scan()
+
+  local r2=ms.Results
+  ms.destroy()
+
+  if #r2==0 then
+    return nil,'No list found'
+  end
+
+
+  if #r2>1 then
+    return nil,'todo: check other pointers for valid stringblocks'
+  end
+
+
+  UEngine.NamePoolData=r2[1]
+  return true
+
+end
+
+function FindNamePoolData(t)
+
+  if UEngine.NamePoolData then return true end --already found
+--ue5
+  local ms=createMemScan()
+  ms.VarType=vtByteArray
+  ms.Hexadecimal=true
+  ms.Scanvalue='* 01 4e 6f 6e 65 * 03 42 79 74' --x None and x ByteProperty
+  ms.Fastscanmethod=fsmAligned
+  ms.Fastscanparameter=10000
+  --ms.Priority='tpIdle'
+  ms.scan()
+
+  while ms.waitTillDone(1000)==false do
+    if t and t.Terminated then
+      ms.terminateScan()
+    end
+  end
+
+
+  firststringblock=ms.results
+  ms.destroy() ms=nil --doing it on the same line so that single step debugging won't get corrupted by bad upvalue pointers
+
+  if t and t.Terminated then
+    return false,'UEInfoScannerThread terminated'
+  end
+
+  if #firststringblock==0 then
+    --maybe an older version
+    local r,err=FindNamePoolData_older()
+
+    return r,err
+  end
+
+  --find references to this address in the target process
+  local probablenamepools={}
+  local ms={}
+  for i=1,#firststringblock do
+    ms[i]=createMemScan()
+    ms[i].VarType=vtQword
+    ms[i].Fastscanmethod=fsmAligned
+    ms[i].Fastscanparameter=8
+
+    ms[i].Scanvalue=firststringblock[i]
+    ms[i].Startaddress=getAddress(process)
+    ms[i].Stopaddress=getAddress(process)+getModuleSize(process)
+    ms[i].scan()
+  end
+
+  r={}
+  for i=1,#firststringblock do
+    ms[i].waitTillDone()
+    local tr=ms[i].Results
+    for j=1,#tr do
+      table.insert(r,tr[j])
+    end
+    ms[i].destroy() ms[i]=nil
+  end
+
+  if t and t.Terminated then
+    return false,'UEInfoScannerThread terminated'
+  end
+
+
+
+  if #r==0 then
+    return false,'not found' --error
+  end
+
+  if #r>1 then
+    return false,'too many found. Needs more refining'
+  end
+
+  if #r==1 then
+    UEngine.NamePoolData = r[1] - 0x10
+    return true
+  end
+end
+
+
+function UEInfoScanner(t)
+  --can be called directly or with a thread
+  if t then
+    t.FreeOnTerminate(false)
+    t.Name='UEInfoScannerThread'
+  end
+
+  if UEngine==nil or UEngine.processid~=getOpenedProcessID() then
+    --start from scratch
+    UEngine={}
+    UEngine.processid=getOpenedProcessID()
+  end
+
+  if UEngine.NamePoolData==nil then
+    local r,err=FindNamePoolData(t)
+    if not r then
+      return nil,'FindNamePoolData failed:'..err
+    end
+  end
+
+  if t and t.Terminated then return nil,'UEInfoScanner terminated' end
+
+
+
+  if UEngine.NameToIndex == nil then
+    local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
+    local r,err=CacheNamePool(t)
+    restoreLuaDebug(originalDebugState)
+
+
+    if not r then
+      return nil,'CacheNamePool failed:'..err
+    end
+  end
+
+  if t and t.Terminated then return nil,'UEInfoScanner terminated' end
+
+
+  if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then
+    local r,err=FindObjectArray(t)
+    if not r then
+      return nil,'FindObjectArray failed:'..err
+    end
+  end
+
+  if UEngine.UGameEngine==nil then
+    local r,err=FindGEngine(t)
+    if not r then
+      return nil,'FindGEngine failed:'..err
+    end
+  end
+
+  if UEngine.UObject.Class==nil then --normal situation
+    for i=1,32 do --skip 0 as it's the vftable
+      local n=UObject_getName(readPointer(UGameEngine+i*4))
+      if n and n=='GameEngine' then
+        UEngine.UObject.Class=i*4
+        break
+      end
+    end
+  end
+
+  if UEngine.UObject.Class==nil then
+    return nil,'UObject.Class not found'
+  end
+
+
+  UEngine.GameEngineClass=readPointer(UEngine.UGameEngine+UEngine.UObject.Class)
+
+  UEngine.UStruct={}
+  UEngine.UStruct.Name=UEngine.UObject.Name
+  UEngine.UStruct.Class=UEngine.UObject.Class
+
+  --gather more info in case it was missed earlier (some paths don't need it yet)
+
+  --the superstruct (UStruct) name of the GameEngine class is Engine
+  --so find a pointer inside the class that leads to an UObject with the name Engine
+
+  --if the game uses an inherited class onject, like OakEngine, then first comes GameEngine (or whatever comes first)
+  --the superlist will end with Engine->Object
+
+  if UEngine.UClass.SuperStruct then --already obtained earlier
+    UEngine.UStruct.SuperStruct=UEngine.UClass.SuperStruct
+  else
+    --superstruct not yet found
+    if UObject_getName(UEngine.GameEngineClass)=='GameEngine' then
+      for i=0,32 do
+        local n=UObject.getName(readPointer(UEngine.GameEngineClass+i*8))
+        if n and n=='Engine' then  --the super of Gameengbine is Engine
+          UEngine.UStruct.SuperStruct=i*8
+          break
+        end
+      end
+    else
+      --it's not a GameEngine class so not sure that comes after (could be more inheritance)
+      for i=1,32 do
+        local r=testIfSuperStructOffset(UEngine.GameEngineClass, i*8)
+
+        if r and #r>2  then
+          for j=1,#r do
+            if r[j]=='Engine' then
+              UEngine.UStruct.SuperStruct=i*8
+              break
+            end
+          end
+
+          if UEngine.UStruct.SuperStruct then
+            break
+          end
+        end
+      end
+    end
+  end
+
+  if UEngine.UStruct.SuperStruct==nil then
+    return nil,'Failed finding the SuperStruct field'
+  end
+
+  UEngine.UClass.Name=UEngine.UStruct.Name
+  UEngine.UClass.Class=UEngine.UStruct.Class
+  UEngine.UClass.SuperStruct=UEngine.UStruct.SuperStruct
+
+
+  UEngine.RealGameEngineClass=UEngine.GameEngineClass
+
+  --UEngine.GameEngineClass might not be the base "GameEngine" class.  Find it if that's the case (to make some assumptions come true)
+  local c=UEngine.GameEngineClass
+  while UObject_getName(c)~='GameEngine' do
+    c=readPointer(c+UEngine.UClass.SuperStruct)
+    if c==nil then
+      return nil,'Failure retrieving base GameEngine class'
+    end
+  end
+  UEngine.GameEngineClass=c
+
+  if t and t.Terminated then
+    return nil,'UEInfoScannerThread terminated'
+  end
+
+  --everything ok so far. Try to find the layout of Property Field objects.  Can be either UProperty or FProperty. Doesn't matter
+  local r=findGameInstanceFPropertyAndFields(t)
+
+  if r then
+    if registerUEngineStructureLookupCallbacks then --added by UEInfoStructureDissect
+      synchronize(registerUEngineStructureLookupCallbacks)
+
+    end
+  end
+end
+
+function LaunchUEInfoScanner()
+  if UEInfoScannerThread then
+    UEInfoScannerThread.Terminate()
+    if UEInfoScannerThread.waitFor(5000) then
+      UEInfoScannerThread.destroy() UEInfoScannerThread=nil
+    end
+    UEInfoScannerThread=nil
+  end
+  UEInfoScannerThread=createThread(UEInfoScanner)
+end
+
+
+
