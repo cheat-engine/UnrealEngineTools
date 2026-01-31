@@ -1,4 +1,5 @@
 --UEInfoScanner and UEInfoStructureDissect are licensed under the MIT License by Eric Heijnen / Cheat Engine
+--https://github.com/cheat-engine/UnrealEngineTools
 
 
 function UObject_getName(UObjectAddress)
