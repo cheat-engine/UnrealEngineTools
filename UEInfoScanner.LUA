@@ -376,7 +376,7 @@ function findGameInstanceFPropertyAndFields(t)
       BestPropertyCount=0
       local altoffset
       for i=1,100 do
-        local p=readPointer(GameEngineClass+i*8)
+        local p=readPointer(UEngine.GameEngineClass+i*8)
 
 
         if isVTable(p) then break end
@@ -401,7 +401,7 @@ function findGameInstanceFPropertyAndFields(t)
       UEngine.UClass.PropertyLinkAlt=altoffset
 
       --find some property specific info (Property size field, and for BoolProperty the bitfields (01 00 bitmask bitmask for properties that have the same offset)
-      local gameEngineProperties=UClass_enumProperties(GameEngineClass)
+      local gameEngineProperties=UClass_enumProperties(UEngine.GameEngineClass)
       local sizes={}
       sizes[1]={}
       sizes[4]={}
@@ -555,7 +555,7 @@ function FindGEngine(t)
   end
   local index=UEngine.NameToIndex['GameEngine']
 
-  local altindex=UEngine.NameToIndex['OakGameEngine'] --alternate option (inherits from gameengine)
+  --local altindex=UEngine.NameToIndex['OakGameEngine'] --alternate option (inherits from gameengine)
 
   if index==nil then return false, "failure finding GameEngine string" end
 
@@ -606,14 +606,15 @@ function FindGEngine(t)
     end
   end
 
-  if #r2>1 then
-    return nil,'FindGEngine needs more refining'
-  end
 
   r={}
   for i=1,#r2 do
     --the instantiated GEngine has a number for the name
     if readInteger(r2[i]+UEngine.UObject.Name+4)~=0 then table.insert(r,r2[i]) end
+  end
+
+  if #r>1 then
+    return nil,'FindGEngine needs more refining'
   end
 
   if #r==0 then
@@ -643,10 +644,11 @@ function FindGEngine(t)
 
         if UEngine.UClass==nil then
           UEngine.UClass={}
+          UEngine.UClass.Name=UEngine.UObject.Name
+          UEngine.UClass.Class=UEngine.UObject.Class
         end
 
-        UEngine.UClass.Name=UEngine.UObject.Name
-        UEngine.UClass.Class=UEngine.UObject.Class
+
         for i=1,32 do
           local n=UObject_getName(readPointer(PotentialGameEngineClass+i*8))  --0x40 in borderlands 4
           if n=='Engine' then
@@ -1000,11 +1002,11 @@ function FindObjectArray(t) --and UObject name offset
       --get the first block
       --test what type of list this is. pointer list, or a (huge) list of ObjectArray entries
 
-      if readByte(readPointer(p)) and readByte(readPointer(p+8)) and readByte(readPointer(p+16)) then
-        UEngine.ObjectArrayListType=0 --list of pointers to ObjectArray entries
+      if readByte(readPointer(p)) and readByte(readPointer(p+8)) then
+        UEngine.ObjectArrayListType=0 --list of sequential pointers to ObjectArray entries
         p=readPointer(p) --p now points to the first object array entry
       else
-        UEngine.ObjectArrayListType=1 --list of ObjectArray entries
+        UEngine.ObjectArrayListType=1 --list of Object entries (ot the list is just 1 long. Maybe launched too soon?)
       end
 
       local goodrangestart=getAddress(process)
@@ -1015,7 +1017,7 @@ function FindObjectArray(t) --and UObject name offset
 
       local object1=readPointer(p)
       local vftable=readPointer(object1)
-      local firstfunctionaddress=readPointer(vftable)
+      local firstfunctionaddress=readPointer(vftable) --get the address of the first function pointed at in the vftable
       for i=1,#sections do
         if firstfunctionaddress>=sections[i].Address and firstfunctionaddress<sections[i].Address+sections[i].Size then
           if sections[i].IsCode and sections[i].IsExecutable then
@@ -1686,13 +1688,19 @@ function UEInfoScanner(t)
   --if the game uses an inherited class onject, like OakEngine, then first comes GameEngine (or whatever comes first)
   --the superlist will end with Engine->Object
 
+  if UEngine.UClass==nil then
+    UEngine.UClass={}
+    UEngine.UClass.Name=UEngine.UObject.Name
+    UEngine.UClass.Class=UEngine.UObject.Class
+  end
+
   if UEngine.UClass.SuperStruct then --already obtained earlier
     UEngine.UStruct.SuperStruct=UEngine.UClass.SuperStruct
   else
     --superstruct not yet found
     if UObject_getName(UEngine.GameEngineClass)=='GameEngine' then
       for i=0,32 do
-        local n=UObject.getName(readPointer(UEngine.GameEngineClass+i*8))
+        local n=UObject_getName(readPointer(UEngine.GameEngineClass+i*8))
         if n and n=='Engine' then  --the super of Gameengbine is Engine
           UEngine.UStruct.SuperStruct=i*8
           break
@@ -1763,8 +1771,15 @@ function LaunchUEInfoScanner()
     end
     UEInfoScannerThread=nil
   end
-  UEInfoScannerThread=createThread(UEInfoScanner)
+  UEInfoScannerThread=createThread(function()
+    local r,err=UEInfoScanner()
+    
+    print("UEInfoScanner done")
+    if err then
+      print(err)
+    end
+  end)
 end
 
 
-
+--return UEInfoScanner()

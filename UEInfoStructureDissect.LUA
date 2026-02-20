@@ -222,10 +222,7 @@ function registerUEngineStructureLookupCallbacks()
     UEngineStructDissect=nil
   end
 
-  print("poop init")
-
   UEngineStructDissect=registerStructureDissectOverride2(function(address)
-    print("poop 2")
     if UEngine_findStructureStart(address) then
       local s=UEngine_createStructureFromObject(address)
       return s
