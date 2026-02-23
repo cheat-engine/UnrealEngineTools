@@ -1622,17 +1622,44 @@ function FindNamePoolData(t)
   end
 
 
+  if #r>1 then
+    --the pointer after it points to another string list and before it looks like a number of strings and a number of pointers to stringlists
+    --the pointers it points to also have an allocation size of 0x20000
+    local r2={}
+    for i=1,#r do
+      local valid=true
+      for j=1,3 do
+        local a=readPointer(r[i]+j*8)
+        if a~=0 then --I don't think this version has empty pointers, but for now allow it
+          local mri=getMemoryRegionInfo(a)
+          if (mri==nil) or (mri.RegionSize~=0x20000) then
+            valid=false
+            break
+          end
+        end
+      end
+      if valid then
+        table.insert(r2,r[i])
+      end
+    end
+
+    r=r2
+
+    if #r>1 then
+      return false,'too many found. Needs more refining'
+    end
+  end
+
 
   if #r==0 then
     return false,'not found' --error
   end
 
-  if #r>1 then
-    return false,'too many found. Needs more refining'
-  end
+
 
   if #r==1 then
-    UEngine.NamePoolData = r[1] - 0x10
+    UEngine.NamePoolData = r[1] - 0x10 --todo: save this address for the next run
+    
     return true
   end
 end
@@ -1686,7 +1713,7 @@ function UEInfoScanner(t)
       if UEInfoScannerThread and (messageDialog('Cancel the unreal engine data collection?',mtConfirmation,mbYes, mbNo)==mrYes) then
         UEInfoScannerThread.Terminate()        
       end
-    end)
+    end
     UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStatus)    
   end)
 
@@ -1932,7 +1959,7 @@ function LaunchUEInfoScanner()
         log('UEInfoScanner failure')
       end
       synchronize(function()
-        if UEngine.GUI.miUnrealEngine then
+        if UEngine.GUI and UEngine.GUI.miUnrealEngine then
           UEngine.GUI.miUnrealEngine.destroy()
           UEngine.GUI=nil
         end
