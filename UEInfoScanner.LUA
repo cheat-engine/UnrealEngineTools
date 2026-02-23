@@ -5,6 +5,7 @@
 local function log(str)
   if UEngine==nil then
     UEngine={}
+    UEngine.processid=getOpenedProcessID()    
   end
   
   if UEngine.log==nil then
@@ -607,7 +608,12 @@ function FindGEngine(t)
   ms.ScanCopyOnWrite='scanExclude'
 
   ms.scan()
+  
+  log('FindGEngine: Starting scan for '..ms.Scanvalue)
+  
   ms.waitTillDone()
+  
+  log('FindGEngine: Scan finished')  
 
   sleep(1000)
 
@@ -1667,7 +1673,10 @@ end
 
 function UEInfoScanner(t)
   --can be called directly or with a thread
+  log('UEInfoScanner start');
+  
   if t then
+    log('Threaded')
     t.FreeOnTerminate(false)
     t.Name='UEInfoScannerThread'
   end
@@ -1704,23 +1713,37 @@ function UEInfoScanner(t)
     end
     
     UEngine.GUI.miUnrealEngine=createMenuItem(MainForm)
-    UEngine.GUI.miUnrealEngine.Caption='Unreal Engine*'
+    UEngine.GUI.miUnrealEngine.Caption='Initializing Unreal Engine'
     UEngine.GUI.miUnrealEngine.Name='miUnrealEngine'
     
     UEngine.GUI.miStatus=createMenuItem(MainForm)
     UEngine.GUI.miStatus.Name='miStatus'
     UEngine.GUI.miStatus.OnClick=function()
-      if UEInfoScannerThread and (messageDialog('Cancel the unreal engine data collection?',mtConfirmation,mbYes, mbNo)==mrYes) then
+      if UEInfoScannerThread and (messageDialog('Cancel the Unreal Engine data collection?',mtConfirmation,mbYes, mbNo)==mrYes) then
         UEInfoScannerThread.Terminate()        
       end
     end
     UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStatus)    
+    
+    UEngine.GUI.miHurry=createMenuItem(MainForm)
+    UEngine.GUI.miHurry.Name='miHurry'
+    UEngine.GUI.miHurry.Caption='Prioritize this'
+    UEngine.GUI.miHurry.OnClick=function()
+      if UEInfoScannerThread then
+        UEInfoScannerThread.Priority='tpHigher'  
+      end
+      UEngine.GUI.miHurry.destroy()
+    end
+    UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miHurry)    
+    
+    
+    MainForm.Menu.Items.insert(MainForm.miHelp.MenuIndex, UEngine.GUI.miUnrealEngine)
   end)
 
 
   if UEngine.NameToIndex == nil then  
     log('Loading string table')
-    synchronze(function()
+    synchronize(function()
       UEngine.GUI.miStatus.Caption='Loading string table' 
     end)
   
@@ -1741,7 +1764,7 @@ function UEInfoScanner(t)
 
   if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then
     log('Scanning for object table')
-    synchronze(function()
+    synchronize(function()
       UEngine.GUI.miStatus.Caption='Scanning for object table' 
     end)
   
@@ -1754,13 +1777,19 @@ function UEInfoScanner(t)
 
   if UEngine.UGameEngine==nil then
     log('Searching for GEngine')
-    synchronze(function()
+    synchronize(function()
       UEngine.GUI.miStatus.Caption='Searching for GEngine' 
     end)
   
   
     local r,err=FindGEngine(t)
+    log('FindGEngine returned')
     if not r then
+      if err then
+        log('FindGEngine failed:'..err)
+      else
+        log('FindGEngine failed')
+      end
       return nil,'FindGEngine failed:'..err
     end
   end
@@ -1863,7 +1892,7 @@ function UEInfoScanner(t)
   --everything ok so far. Try to find the layout of Property Field objects.  Can be either UProperty or FProperty. Doesn't matter
   
   log('Figuring out the other offsets (findGameInstanceFPropertyAndFields) ')  
-  synchronze(function()
+  synchronize(function()
     UEngine.GUI.miStatus.Caption='Figuring out offsets' 
   end)
   
@@ -1889,8 +1918,18 @@ function UEInfoScanner(t)
           end
         end
         
+        
+        UEngine.GUI.miStatus.destroy()
+        UEngine.GUI.miStatus=nil
+
+        UEngine.GUI.miHurry.destroy()
+        UEngine.GUI.miHurry=nil
+        
+        UEngine.GUI.miUnrealEngine.Caption='Unreal Engine'
       end)      
     end
+    
+    return r
   end
 end
 
@@ -1944,7 +1983,7 @@ function LaunchUEInfoScanner()
     log('UEInfoScannerThread finished')
     if r then
       log('UEInfoScanner: Success')
-      synchronze(function()    
+      synchronize(function()    
         UEngine.GUI.miUnrealEngine.caption='Unreal Engine'
         UEngine.GUI.miUnrealEngine.destroy()
       end)
