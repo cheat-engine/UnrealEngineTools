@@ -2,6 +2,18 @@
 --https://github.com/cheat-engine/UnrealEngineTools
 
 
+local function log(str)
+  if UEngine==nil then
+    UEngine={}
+  end
+  
+  if UEngine.log==nil then
+    UEngine.log=''
+  end
+  
+  UEngine.log=UEngine.log..str..'\n\r'
+end
+
 function UObject_getName(UObjectAddress)
   if UEngine==nil or UEngine.UObject==nil or UEngine.UObject.Name==nil or UEngine.IndexToName==nil then
     return nil,'UEngine.UObject.Name not initialized yet'
@@ -26,13 +38,25 @@ end
 function UObject_enumProperties(address)
   local class=readPointer(address+UEngine.UObject.Class)
   if class then
-    return UClass.enumProperties(class)
+    return UClass_enumProperties(class)
   else
     return nil,'Failure to read class field'
   end
 end
 
-function UClass_enumProperties(class,usealt)
+function UClass_enumProperties(class,usealt,r)
+  --get the parent fields as well? (remove duplicates)
+  if not r then
+    r={}
+  end
+
+  if UEngine.UClass.SuperStruct then
+    local super=readPointer(class+UEngine.UClass.SuperStruct)
+    if super then
+      UClass_enumProperties(super,usealt,r)
+    end
+  end
+
   local p
   if not usealt then
     p=readPointer(class+UEngine.UClass.PropertyLink)
@@ -43,37 +67,42 @@ function UClass_enumProperties(class,usealt)
     p=readPointer(class+UEngine.UClass.PropertyLinkAlt)
   end
   if p and p~=0 then
-    local r={}
+
     while p and p~=0 do
       e={}
       local v=readInteger(p+UEngine.FProperty.Name)
       local name=UEngine.IndexToName[v]
-      local offset=readInteger(p+UEngine.FProperty.Offset)
+      if v and name then
+        local offset=readInteger(p+UEngine.FProperty.Offset)
 
-      e.offset=offset
-      e.propertyAddress=p
+        e.offset=offset
+        e.propertyAddress=p
 
-      local c=readPointer(p+UEngine.FProperty.Class)
-      if c==nil then
-        return nil,'c was nil'
+        local c=readPointer(p+UEngine.FProperty.Class)
+        if c==nil then
+          return nil,'c was nil'
+        end
+        local nameIndex=readInteger(c+UEngine.FFieldClass.Name)
+
+        if nameIndex==nil then
+          return nil,'nameIndex==nil'
+        end
+
+        e.propertyType=UEngine.IndexToName[nameIndex]
+
+
+        if UEngine.FProperty.Size then
+          e.size=readInteger(p+UEngine.FProperty.Size)
+        end
+
+        r[name]=e --override even if it existed
+
       end
-      local nameIndex=readInteger(c+UEngine.FFieldClass.Name)
-
-      if nameIndex==nil then
-        return nil,'nameIndex==nil'
-      end
-
-      e.propertyType=UEngine.IndexToName[nameIndex]
-
-
-      if UEngine.FProperty.Size then
-        e.size=readInteger(p+UEngine.FProperty.Size)
-      end
-      r[name]=e
 
 
       p=readPointer(p+UEngine.FProperty.PropertyLinkNext)
     end
+
 
     return r
   else
@@ -911,6 +940,8 @@ __cdecl void ConvertBackRoutine(size_t input, unsigned long long address, unsign
   if UObjectArray_Verifier_Type==nil and emsg then
     error(emsg)
   end
+  
+  UObjectArray_Verifier_Type.InternalOnly=true
 end
 
 function FindObjectArray(t) --and UObject name offset
@@ -1336,7 +1367,7 @@ function CacheNamePool(t)
   if UEngine.NamePoolData==nil then
     return false, 'CacheNamePool: UEngine.NamePoolData is still undefined'
   end
-  SetupNamePoolLookupType()
+
 
   if UEngine.NamePoolData_old then
     return CacheNamePool_old(t)
@@ -1621,17 +1652,51 @@ function UEInfoScanner(t)
   end
 
   if UEngine.NamePoolData==nil then
+    log('Searching for NamePool')
     local r,err=FindNamePoolData(t)
     if not r then
+      log('Failed searching for NamePool:'..err)
       return nil,'FindNamePoolData failed:'..err
     end
   end
 
   if t and t.Terminated then return nil,'UEInfoScanner terminated' end
 
+  --still here, notify that there is some unreal info available
+
+  log('Creating menuitem')
+
+  synchronize(function()
+    
+    if UEngine.GUI==nil then
+      UEngine.GUI={}
+    elseif UEngine.GUI.miUnrealEngine then
+      UEngine.GUI.miUnrealEngine.destroy()
+      UEngine.GUI.miUnrealEngine=nil
+      UEngine.GUI={} --clear everything under it 
+    end
+    
+    UEngine.GUI.miUnrealEngine=createMenuItem(MainForm)
+    UEngine.GUI.miUnrealEngine.Caption='Unreal Engine*'
+    UEngine.GUI.miUnrealEngine.Name='miUnrealEngine'
+    
+    UEngine.GUI.miStatus=createMenuItem(MainForm)
+    UEngine.GUI.miStatus.Name='miStatus'
+    UEngine.GUI.miStatus.OnClick=function()
+      if UEInfoScannerThread and (messageDialog('Cancel the unreal engine data collection?',mtConfirmation,mbYes, mbNo)==mrYes) then
+        UEInfoScannerThread.Terminate()        
+      end
+    end)
+    UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStatus)    
+  end)
 
 
-  if UEngine.NameToIndex == nil then
+  if UEngine.NameToIndex == nil then  
+    log('Loading string table')
+    synchronze(function()
+      UEngine.GUI.miStatus.Caption='Loading string table' 
+    end)
+  
     local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
     local r,err=CacheNamePool(t)
     restoreLuaDebug(originalDebugState)
@@ -1640,12 +1705,20 @@ function UEInfoScanner(t)
     if not r then
       return nil,'CacheNamePool failed:'..err
     end
+    
+    SetupNamePoolLookupType() --the cache is done. make it available to the user
   end
 
   if t and t.Terminated then return nil,'UEInfoScanner terminated' end
 
 
   if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then
+    log('Scanning for object table')
+    synchronze(function()
+      UEngine.GUI.miStatus.Caption='Scanning for object table' 
+    end)
+  
+  
     local r,err=FindObjectArray(t)
     if not r then
       return nil,'FindObjectArray failed:'..err
@@ -1653,6 +1726,12 @@ function UEInfoScanner(t)
   end
 
   if UEngine.UGameEngine==nil then
+    log('Searching for GEngine')
+    synchronze(function()
+      UEngine.GUI.miStatus.Caption='Searching for GEngine' 
+    end)
+  
+  
     local r,err=FindGEngine(t)
     if not r then
       return nil,'FindGEngine failed:'..err
@@ -1660,6 +1739,7 @@ function UEInfoScanner(t)
   end
 
   if UEngine.UObject.Class==nil then --normal situation
+    log('Figuring out the "class" offset')  
     for i=1,32 do --skip 0 as it's the vftable
       local n=UObject_getName(readPointer(UGameEngine+i*4))
       if n and n=='GameEngine' then
@@ -1670,6 +1750,7 @@ function UEInfoScanner(t)
   end
 
   if UEngine.UObject.Class==nil then
+    log('Failed finding the "class" offset')    
     return nil,'UObject.Class not found'
   end
 
@@ -1753,14 +1834,68 @@ function UEInfoScanner(t)
   end
 
   --everything ok so far. Try to find the layout of Property Field objects.  Can be either UProperty or FProperty. Doesn't matter
+  
+  log('Figuring out the other offsets (findGameInstanceFPropertyAndFields) ')  
+  synchronze(function()
+    UEngine.GUI.miStatus.Caption='Figuring out offsets' 
+  end)
+  
+  
   local r=findGameInstanceFPropertyAndFields(t)
 
   if r then
+    log('success. Registering structure lookup callback')
     if registerUEngineStructureLookupCallbacks then --added by UEInfoStructureDissect
-      synchronize(registerUEngineStructureLookupCallbacks)
-
+      synchronize(function()
+        registerUEngineStructureLookupCallbacks()
+        
+        --It can be annoying, so add an option to disable it for now
+        UEngine.GUI.miStructureDissectCallbackStatus=createMenuItem(MainForm)
+        UEngine.GUI.miStructureDissectCallbackStatus.Caption='Use when dissecting structures'
+        UEngine.GUI.miStructureDissectCallbackStatus.Name='miStructureDissectCallbackStatus'
+        UEngine.GUI.miStructureDissectCallbackStatus.AutoCheck=true
+        UEngine.GUI.miStructureDissectCallbackStatus.OnClick=function()
+          if UEngine.GUI.miStructureDissectCallbackStatus.checked then
+            registerUEngineStructureLookupCallbacks()
+          else
+            unregisterUEngineStructureLookupCallbacks()
+          end
+        end
+        
+      end)      
     end
   end
+end
+
+function couldBeUnrealEngine()
+  local pname=extractFileNameWithoutExt(process)
+  if getAddressSafe(pname..'.agsInit') then return true end
+  if getAddressSafe(pname..'.NvOptimusEnablement') then return true end   
+  
+  if pname:lower():endsWith('shipping') then return true end 
+  
+  
+  local r=enumModules()
+  if r then
+    local v,res=getFileVersion(r[1].PathToFile)
+    if res then
+      if res.ProductVersion and res.ProductVersion:find('%+UE4') then return true end
+      if res.ProductVersion and res.ProductVersion:find('%+UE5') then return true end     
+      
+    end
+  end
+  
+  return false
+end
+
+function WaitForUnrealEngineInfo(timeout)
+  if UEInfoScannerThread then
+    UEInfoScannerThread.Priority='tpHigher'
+  
+    return UEInfoScannerThread.waitForThread(timeout)    
+  end
+  
+  return true
 end
 
 function LaunchUEInfoScanner()
@@ -1771,15 +1906,57 @@ function LaunchUEInfoScanner()
     end
     UEInfoScannerThread=nil
   end
-  UEInfoScannerThread=createThread(function()
-    local r,err=UEInfoScanner()
+  UEInfoScannerThread=createThread(function(t)
     
-    print("UEInfoScanner done")
-    if err then
-      print(err)
+    log('UEInfoScannerThread started')
+   
+  
+    t.Priority='tpIdle'
+    local r,err=UEInfoScanner(t)  
+
+    log('UEInfoScannerThread finished')
+    if r then
+      log('UEInfoScanner: Success')
+      synchronze(function()    
+        UEngine.GUI.miUnrealEngine.caption='Unreal Engine'
+        UEngine.GUI.miUnrealEngine.destroy()
+      end)
+      
+      --store some data for this specific version, to speed up next run
+  
+  
+    else
+      if err then
+        log('UEInfoScanner failure:'..err)
+      else
+        log('UEInfoScanner failure')
+      end
+      synchronize(function()
+        if UEngine.GUI.miUnrealEngine then
+          UEngine.GUI.miUnrealEngine.destroy()
+          UEngine.GUI=nil
+        end
+      end)
+      
     end
+    
+    
+    --if err then
+    --  print(err)
+    --end
   end)
 end
 
+local oldOnProcessOpened=MainForm.OnProcessOpened
 
---return UEInfoScanner()
+MainForm.OnProcessOpened=function()
+  if UEInfoScannerThread then
+    UEInfoScannerThread.Terminate()
+  end
+  
+  if couldBeUnrealEngine() then
+    LaunchUEInfoScanner()
+  end
+  local r=oldOnProcessOpened()  
+end
+

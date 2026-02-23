@@ -6,6 +6,7 @@ for i=0,7 do
   bitbytetobitnr[1<<i]=i
 end
 
+DisableUEngineLookup
 
 function UEngine_createStructureFromObject(address)
   if UEngine.UObject.Class==nil then return nil,'No UObject class offset' end
@@ -193,6 +194,13 @@ end
 
 --createStructureFromObject(readPointer('GEngine'))
 --createStructureFromObject(0x25B23C2A10)
+
+function registerUEngineStructureLookupCallbacks()
+  if UEngineStructNameLookup then
+    unregisterStructureNameLookup(UEngineStructNameLookup)
+    UEngineStructNameLookup=nil
+  end
+end
 
 function registerUEngineStructureLookupCallbacks()
   --register a structure dissect that gets the base address and dissects it
