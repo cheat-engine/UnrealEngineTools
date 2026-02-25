@@ -627,6 +627,8 @@ function FindGEngine(t)
 
   ms.destroy()
   ms=nil
+  
+  log('FindGEngine: Next scan finished')    
 
 
   if #r>=1 then
@@ -637,7 +639,6 @@ function FindGEngine(t)
         --still here
         table.insert(r2,r[i])
       end
-
     end
   end
 
@@ -653,9 +654,12 @@ function FindGEngine(t)
   end
 
   if #r==0 then
+    log('FindGEngine: No direct GEngine found')    
+
 
     --no instance found, maybe it created a subclass
     if #r2>=1 then
+      log('Searching deeper')
       for gei=1,#r2 do
         local PotentialGameEngineClass=r2[gei]
 
@@ -942,8 +946,7 @@ __cdecl void ConvertBackRoutine(size_t input, unsigned long long address, unsign
   //nope
 }
 
-{$asm}]])
-  if UObjectArray_Verifier_Type==nil and emsg then
+{$asm}]])if UObjectArray_Verifier_Type==nil and emsg then
     error(emsg)
   end
   
@@ -953,6 +956,7 @@ end
 function FindObjectArray(t) --and UObject name offset
 
   --for 4.26 >
+  local r={}
 
   if UObjectArray_Verifier_Type==nil then
     InitializeUObjectArray_Verifier_Type()
@@ -961,69 +965,75 @@ function FindObjectArray(t) --and UObject name offset
       return nil,'No verifier type'
     end
   end
+  
+  if UEngine.ObjectArray==nil then
 
-  local ms=createMemScan()
-  ms.VarType=vtGrouped --custom type only also works
-  ms.Fastscanmethod=fsmAligned
-  ms.Fastscanparameter=10
+    local ms=createMemScan()
+    ms.VarType=vtGrouped --custom type only also works
+    ms.Fastscanmethod=fsmAligned
+    ms.Fastscanparameter=10
 
-  ms.Scanvalue='BA:8 c(UObjectArray Verifier Type):1 p:D'
-  ms.Startaddress=getAddress(process)
-  ms.Stopaddress=getAddress(process)+getModuleSize(process)
-  ms.scan()
-  ms.waitTillDone()
-  local r=ms.Results
+    ms.Scanvalue='BA:8 c(UObjectArray Verifier Type):1 p:D'
+    ms.Startaddress=getAddress(process)
+    ms.Stopaddress=getAddress(process)+getModuleSize(process)
+    ms.scan()
+    ms.waitTillDone()
+    r=ms.Results
 
-  local errorstring=ms.ErrorString
-  ms.destroy()
-  ms=nil
+    local errorstring=ms.ErrorString
+    ms.destroy()
+    ms=nil
 
-  if t and t.Terminated then return false, 'UEInfoScannerThread terminated' end
+    if t and t.Terminated then return false, 'UEInfoScannerThread terminated' end
 
 
-  if #r==0 then
-    return false,'Failed finding anything ('..errorstring..')'
-  end
-
-  if #r>1 then
-    local r2={}
-    --find the ones with
-    for i=1,#r do
-      if (readInteger(r[i])==0) or (readInteger(r[i])>100) then
-        table.insert(r2,r[i])
-      end
+    if #r==0 then
+      return false,'Failed finding anything ('..errorstring..')'
     end
 
-    r=r2
     if #r>1 then
-      r2={}
-
+      local r2={}
+      --find the ones with
       for i=1,#r do
-        if readInteger(r[i])>100 then
+        if (readInteger(r[i])==0) or (readInteger(r[i])>100) then
           table.insert(r2,r[i])
         end
       end
 
       r=r2
-      r2={}
-      --check if the first pointer pointed at is valid (there are currently 2 known types. Both both have a pointer at the first entry)
-      for i=1,#r do
-        local p=readPointer(r[i]+0x10)
-        if p and readPointer(readPointer(p)) then
-          table.insert(r2,r[i])
-        end
-      end
-
-      r=r2
-
       if #r>1 then
-        --more refining needed. (pick the one with the highest value or a deeper inspection of the array list)
+        r2={}
 
-        return false,'Needs more refining',r
+        for i=1,#r do
+          if readInteger(r[i])>100 then
+            table.insert(r2,r[i])
+          end
+        end
+
+        r=r2
+        r2={}
+        --check if the first pointer pointed at is valid (there are currently 2 known types. Both both have a pointer at the first entry)
+        for i=1,#r do
+          local p=readPointer(r[i]+0x10)
+          if p and readPointer(readPointer(p)) then
+            table.insert(r2,r[i])
+          end
+        end
+
+        r=r2
+
+        if #r>1 then
+          --more refining needed. (pick the one with the highest value or a deeper inspection of the array list)
+
+          return false,'Needs more refining',r
+        end
+
+
       end
-
-
     end
+  else
+    r={}
+    r[1]=UEngine.ObjectArray
   end
 
 
@@ -1670,36 +1680,7 @@ function FindNamePoolData(t)
   end
 end
 
-
-function UEInfoScanner(t)
-  --can be called directly or with a thread
-  log('UEInfoScanner start');
-  
-  if t then
-    log('Threaded')
-    t.FreeOnTerminate(false)
-    t.Name='UEInfoScannerThread'
-  end
-
-  if UEngine==nil or UEngine.processid~=getOpenedProcessID() then
-    --start from scratch
-    UEngine={}
-    UEngine.processid=getOpenedProcessID()
-  end
-
-  if UEngine.NamePoolData==nil then
-    log('Searching for NamePool')
-    local r,err=FindNamePoolData(t)
-    if not r then
-      log('Failed searching for NamePool:'..err)
-      return nil,'FindNamePoolData failed:'..err
-    end
-  end
-
-  if t and t.Terminated then return nil,'UEInfoScanner terminated' end
-
-  --still here, notify that there is some unreal info available
-
+function createUEMenu()
   log('Creating menuitem')
 
   synchronize(function()
@@ -1718,6 +1699,7 @@ function UEInfoScanner(t)
     
     UEngine.GUI.miStatus=createMenuItem(MainForm)
     UEngine.GUI.miStatus.Name='miStatus'
+    UEngine.GUI.miStatus.Caption='Status'
     UEngine.GUI.miStatus.OnClick=function()
       if UEInfoScannerThread and (messageDialog('Cancel the Unreal Engine data collection?',mtConfirmation,mbYes, mbNo)==mrYes) then
         UEInfoScannerThread.Terminate()        
@@ -1733,6 +1715,7 @@ function UEInfoScanner(t)
         UEInfoScannerThread.Priority='tpHigher'  
       end
       UEngine.GUI.miHurry.destroy()
+      UEngine.GUI.miHurry=nil      
     end
     UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miHurry)    
     
@@ -1740,15 +1723,77 @@ function UEInfoScanner(t)
     MainForm.Menu.Items.insert(MainForm.miHelp.MenuIndex, UEngine.GUI.miUnrealEngine)
   end)
 
+end
 
-  if UEngine.NameToIndex == nil then  
+
+function UEInfoScanner(t)
+  --can be called directly or with a thread
+  
+  log('UEInfoScanner start');
+  
+  local id=process..'-'..md5memory(getAddressSafe(process),4096)
+  
+  local s=getSettings("UEInfo\\"..id,true)
+  local r
+  
+  --get data from the registry if available
+  if t then
+    log('Threaded')
+    t.FreeOnTerminate(false)
+    t.Name='UEInfoScannerThread'
+  end
+
+  if UEngine==nil or UEngine.processid~=getOpenedProcessID() then
+    --start from scratch
+    UEngine={}
+    UEngine.processid=getOpenedProcessID()
+  end
+  
+  --[[
+  check the settings if everything has already been found, or if only a subset was found so far. 
+  If only a subset, go through the whole thing, but if everything was found then load all from the registry, but still
+  go through the string cache system  
+  --]]
+  
+  if (s.fullyParsed) then
+    log('The state was fully parsed. Using this')
+    --load all fields and offsets
+    --load the UEngine data from the registry
+    local list=s.getValueList()
+    for name,value in pairs(list) do
+      if name:startsWith('UEngine.') then
+        local sections=table.pack(name:split('.'))
+        
+        local t=UEngine
+        for i=2,#sections-1 do
+          local newt=t[sections[i]]
+          if newt==nil then
+            t[sections[i]]={}
+            
+            newt=t[sections[i]]
+          end         
+          
+          t=newt        
+        end
+        
+        t[sections[#sections]]=tonumber(value)
+      end   
+    end
+    
+    --cache the namepool data
+    createUEMenu()
+    
+    UEngine.NamePoolData=getAddressSafe(s.NamePoolData)
+    UEngine.ObjectArray=getAddressSafe(s.ObjectArray)
+    
     log('Loading string table')
     synchronize(function()
       UEngine.GUI.miStatus.Caption='Loading string table' 
     end)
   
     local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
-    local r,err=CacheNamePool(t)
+    local err
+    r,err=CacheNamePool(t)
     restoreLuaDebug(originalDebugState)
 
 
@@ -1757,149 +1802,247 @@ function UEInfoScanner(t)
     end
     
     SetupNamePoolLookupType() --the cache is done. make it available to the user
-  end
+    
 
-  if t and t.Terminated then return nil,'UEInfoScanner terminated' end
-
-
-  if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then
-    log('Scanning for object table')
-    synchronize(function()
-      UEngine.GUI.miStatus.Caption='Scanning for object table' 
-    end)
-  
-  
-    local r,err=FindObjectArray(t)
-    if not r then
-      return nil,'FindObjectArray failed:'..err
-    end
-  end
-
-  if UEngine.UGameEngine==nil then
-    log('Searching for GEngine')
-    synchronize(function()
-      UEngine.GUI.miStatus.Caption='Searching for GEngine' 
-    end)
-  
-  
-    local r,err=FindGEngine(t)
-    log('FindGEngine returned')
-    if not r then
-      if err then
-        log('FindGEngine failed:'..err)
-      else
-        log('FindGEngine failed')
-      end
-      return nil,'FindGEngine failed:'..err
-    end
-  end
-
-  if UEngine.UObject.Class==nil then --normal situation
-    log('Figuring out the "class" offset')  
-    for i=1,32 do --skip 0 as it's the vftable
-      local n=UObject_getName(readPointer(UGameEngine+i*4))
-      if n and n=='GameEngine' then
-        UEngine.UObject.Class=i*4
-        break
-      end
-    end
-  end
-
-  if UEngine.UObject.Class==nil then
-    log('Failed finding the "class" offset')    
-    return nil,'UObject.Class not found'
-  end
-
-
-  UEngine.GameEngineClass=readPointer(UEngine.UGameEngine+UEngine.UObject.Class)
-
-  UEngine.UStruct={}
-  UEngine.UStruct.Name=UEngine.UObject.Name
-  UEngine.UStruct.Class=UEngine.UObject.Class
-
-  --gather more info in case it was missed earlier (some paths don't need it yet)
-
-  --the superstruct (UStruct) name of the GameEngine class is Engine
-  --so find a pointer inside the class that leads to an UObject with the name Engine
-
-  --if the game uses an inherited class onject, like OakEngine, then first comes GameEngine (or whatever comes first)
-  --the superlist will end with Engine->Object
-
-  if UEngine.UClass==nil then
-    UEngine.UClass={}
-    UEngine.UClass.Name=UEngine.UObject.Name
-    UEngine.UClass.Class=UEngine.UObject.Class
-  end
-
-  if UEngine.UClass.SuperStruct then --already obtained earlier
-    UEngine.UStruct.SuperStruct=UEngine.UClass.SuperStruct
+    
+    
+    
+    
+    r=true
+   
   else
-    --superstruct not yet found
-    if UObject_getName(UEngine.GameEngineClass)=='GameEngine' then
-      for i=0,32 do
-        local n=UObject_getName(readPointer(UEngine.GameEngineClass+i*8))
-        if n and n=='Engine' then  --the super of Gameengbine is Engine
-          UEngine.UStruct.SuperStruct=i*8
+    log('New or incomplete state')
+    if UEngine.NamePoolData==nil then
+      local sNamePoolData=s.NamePoolData
+      if sNamePoolData then
+        UEngine.NamePoolData=getAddressSafe(sNamePoolData)
+        log('NamePoolData was previously at '..sNamePoolData..' . Using that')
+      end 
+    end   
+
+    if UEngine.NamePoolData==nil then
+      log('Searching for NamePool')
+      local r,err=FindNamePoolData(t)
+      if not r then
+        log('Failed searching for NamePool:'..err)
+        return nil,'FindNamePoolData failed:'..err
+      end
+      
+      s.NamePoolData=getNameFromAddress(UEngine.NamePoolData)        
+    end
+    
+    
+
+    if t and t.Terminated then return nil,'UEInfoScanner terminated' end
+
+    --still here, notify that there is some unreal info available
+
+    createUEMenu()
+    
+
+    if UEngine.NameToIndex == nil then  
+      log('Loading string table')
+      synchronize(function()
+        UEngine.GUI.miStatus.Caption='Loading string table' 
+      end)
+    
+      local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
+      local r,err=CacheNamePool(t)
+      restoreLuaDebug(originalDebugState)
+
+
+      if not r then
+        return nil,'CacheNamePool failed:'..err
+      end
+      
+      SetupNamePoolLookupType() --the cache is done. make it available to the user
+    end
+
+    if t and t.Terminated then return nil,'UEInfoScanner terminated' end
+
+    if UEngine.ObjectArray==nil then
+      local sObjectArray=s.ObjectArray
+      if sObjectArray then
+        UEngine.ObjectArray=getAddressSafe(sObjectArray)
+      end
+    end
+      
+    if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then  
+      log('Scanning for object table')
+      synchronize(function()
+        UEngine.GUI.miStatus.Caption='Scanning for object table' 
+      end)
+    
+
+    
+      local r,err=FindObjectArray(t)
+      if not r then
+        return nil,'FindObjectArray failed:'..err
+      end
+      s.ObjectArray=getNameFromAddress(UEngine.ObjectArray)    
+      
+    end
+
+    if UEngine.UGameEngine==nil then     
+      log('Searching for GEngine')
+      synchronize(function()
+        UEngine.GUI.miStatus.Caption='Searching for GEngine' 
+      end)
+    
+    
+      local r,err=FindGEngine(t)
+      log('FindGEngine returned')
+      if not r then
+        if err then
+          log('FindGEngine failed:'..err)
+        else
+          log('FindGEngine failed')
+        end
+        return nil,'FindGEngine failed:'..err
+      end
+    end
+
+    if UEngine.UObject.Class==nil then --normal situation
+      log('Figuring out the "class" offset')  
+      for i=1,32 do --skip 0 as it's the vftable
+        local n=UObject_getName(readPointer(UGameEngine+i*4))
+        if n and n=='GameEngine' then
+          UEngine.UObject.Class=i*4
           break
         end
       end
-    else
-      --it's not a GameEngine class so not sure that comes after (could be more inheritance)
-      for i=1,32 do
-        local r=testIfSuperStructOffset(UEngine.GameEngineClass, i*8)
+    end
 
-        if r and #r>2  then
-          for j=1,#r do
-            if r[j]=='Engine' then
-              UEngine.UStruct.SuperStruct=i*8
+    if UEngine.UObject.Class==nil then
+      log('Failed finding the "class" offset')    
+      return nil,'UObject.Class not found'
+    end
+
+
+    UEngine.GameEngineClass=readPointer(UEngine.UGameEngine+UEngine.UObject.Class)
+
+    UEngine.UStruct={}
+    UEngine.UStruct.Name=UEngine.UObject.Name
+    UEngine.UStruct.Class=UEngine.UObject.Class
+
+    --gather more info in case it was missed earlier (some paths don't need it yet)
+
+    --the superstruct (UStruct) name of the GameEngine class is Engine
+    --so find a pointer inside the class that leads to an UObject with the name Engine
+
+    --if the game uses an inherited class onject, like OakEngine, then first comes GameEngine (or whatever comes first)
+    --the superlist will end with Engine->Object
+
+    if UEngine.UClass==nil then
+      UEngine.UClass={}
+      UEngine.UClass.Name=UEngine.UObject.Name
+      UEngine.UClass.Class=UEngine.UObject.Class
+    end
+
+    if UEngine.UClass.SuperStruct then --already obtained earlier
+      UEngine.UStruct.SuperStruct=UEngine.UClass.SuperStruct
+    else
+      --superstruct not yet found
+      if UObject_getName(UEngine.GameEngineClass)=='GameEngine' then
+        for i=0,32 do
+          local n=UObject_getName(readPointer(UEngine.GameEngineClass+i*8))
+          if n and n=='Engine' then  --the super of Gameengbine is Engine
+            UEngine.UStruct.SuperStruct=i*8
+            break
+          end
+        end
+      else
+        --it's not a GameEngine class so not sure that comes after (could be more inheritance)
+        for i=1,32 do
+          local r=testIfSuperStructOffset(UEngine.GameEngineClass, i*8)
+
+          if r and #r>2  then
+            for j=1,#r do
+              if r[j]=='Engine' then
+                UEngine.UStruct.SuperStruct=i*8
+                break
+              end
+            end
+
+            if UEngine.UStruct.SuperStruct then
               break
             end
-          end
-
-          if UEngine.UStruct.SuperStruct then
-            break
           end
         end
       end
     end
-  end
 
-  if UEngine.UStruct.SuperStruct==nil then
-    return nil,'Failed finding the SuperStruct field'
-  end
-
-  UEngine.UClass.Name=UEngine.UStruct.Name
-  UEngine.UClass.Class=UEngine.UStruct.Class
-  UEngine.UClass.SuperStruct=UEngine.UStruct.SuperStruct
-
-
-  UEngine.RealGameEngineClass=UEngine.GameEngineClass
-
-  --UEngine.GameEngineClass might not be the base "GameEngine" class.  Find it if that's the case (to make some assumptions come true)
-  local c=UEngine.GameEngineClass
-  while UObject_getName(c)~='GameEngine' do
-    c=readPointer(c+UEngine.UClass.SuperStruct)
-    if c==nil then
-      return nil,'Failure retrieving base GameEngine class'
+    if UEngine.UStruct.SuperStruct==nil then
+      return nil,'Failed finding the SuperStruct field'
     end
-  end
-  UEngine.GameEngineClass=c
 
-  if t and t.Terminated then
-    return nil,'UEInfoScannerThread terminated'
-  end
+    UEngine.UClass.Name=UEngine.UStruct.Name
+    UEngine.UClass.Class=UEngine.UStruct.Class
+    UEngine.UClass.SuperStruct=UEngine.UStruct.SuperStruct
 
-  --everything ok so far. Try to find the layout of Property Field objects.  Can be either UProperty or FProperty. Doesn't matter
-  
-  log('Figuring out the other offsets (findGameInstanceFPropertyAndFields) ')  
-  synchronize(function()
-    UEngine.GUI.miStatus.Caption='Figuring out offsets' 
-  end)
-  
-  
-  local r=findGameInstanceFPropertyAndFields(t)
+
+    UEngine.RealGameEngineClass=UEngine.GameEngineClass
+
+    --UEngine.GameEngineClass might not be the base "GameEngine" class.  Find it if that's the case (to make some assumptions come true)
+    local c=UEngine.GameEngineClass
+    while UObject_getName(c)~='GameEngine' do
+      c=readPointer(c+UEngine.UClass.SuperStruct)
+      if c==nil then
+        return nil,'Failure retrieving base GameEngine class'
+      end
+    end
+    UEngine.GameEngineClass=c
+
+    if t and t.Terminated then
+      return nil,'UEInfoScannerThread terminated'
+    end
+
+    --everything ok so far. Try to find the layout of Property Field objects.  Can be either UProperty or FProperty. Doesn't matter
+    
+    log('Figuring out the other offsets (findGameInstanceFPropertyAndFields) ')  
+    synchronize(function()
+      UEngine.GUI.miStatus.Caption='Figuring out offsets' 
+    end)
+    
+    
+    r=findGameInstanceFPropertyAndFields(t)
+  end
 
   if r then
+    if s.fullyParsed==nil then
+      --save all offsets
+     
+      function saveLuaTable(tablename,t)
+        if t then
+          for name,value in pairs(t) do
+            local n=tablename..'.'..name
+            
+            if type(value)=='table' then
+              saveLuaTable(n,value)
+            else
+              s[n]=tostring(value)
+            end
+            
+          end
+        end
+      end
+      
+      saveLuaTable('UEngine.FNameEntry', UEngine.FNameEntry)
+      saveLuaTable('UEngine.UObject', UEngine.UObject)
+      saveLuaTable('UEngine.UStruct', UEngine.UStruct)
+      saveLuaTable('UEngine.UClass', UEngine.UClass)
+      saveLuaTable('UEngine.FProperty', UEngine.FProperty)
+      saveLuaTable('UEngine.FFieldClass', UEngine.FFieldClass)      
+      saveLuaTable('UEngine.FField', UEngine.FField)   
+
+      s['UEngine.VFTableInExecutableMemoryMethod']=UEngine.VFTableInExecutableMemoryMethod
+      s['UEngine.ObjectArrayListType']=UEngine.ObjectArrayListType
+      
+      
+      
+      s.fullyParsed=true
+    end
+    
     log('success. Registering structure lookup callback')
     if registerUEngineStructureLookupCallbacks then --added by UEInfoStructureDissect
       synchronize(function()
@@ -1910,6 +2053,7 @@ function UEInfoScanner(t)
         UEngine.GUI.miStructureDissectCallbackStatus.Caption='Use when dissecting structures'
         UEngine.GUI.miStructureDissectCallbackStatus.Name='miStructureDissectCallbackStatus'
         UEngine.GUI.miStructureDissectCallbackStatus.AutoCheck=true
+        UEngine.GUI.miStructureDissectCallbackStatus.Checked=true
         UEngine.GUI.miStructureDissectCallbackStatus.OnClick=function()
           if UEngine.GUI.miStructureDissectCallbackStatus.checked then
             registerUEngineStructureLookupCallbacks()
@@ -1918,12 +2062,16 @@ function UEInfoScanner(t)
           end
         end
         
+        UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStructureDissectCallbackStatus)
+        
         
         UEngine.GUI.miStatus.destroy()
         UEngine.GUI.miStatus=nil
 
-        UEngine.GUI.miHurry.destroy()
-        UEngine.GUI.miHurry=nil
+        if UEngine.GUI.miHurry then
+          UEngine.GUI.miHurry.destroy()
+          UEngine.GUI.miHurry=nil
+        end
         
         UEngine.GUI.miUnrealEngine.Caption='Unreal Engine'
       end)      
