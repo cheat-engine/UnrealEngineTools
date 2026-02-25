@@ -843,10 +843,10 @@ function isInExecutableMainModuleMemory(address)
 
       local executablePageProtect={}
 
-      UEngine.ExecutableRanges[PAGE_EXECUTE]=true
-      UEngine.ExecutableRanges[PAGE_EXECUTE_READ]=true
-      UEngine.ExecutableRanges[PAGE_EXECUTE_READWRITE]=true
-      UEngine.ExecutableRanges[PAGE_EXECUTE_WRITECOPY]=true
+      executablePageProtect[PAGE_EXECUTE]=true
+      executablePageProtect[PAGE_EXECUTE_READ]=true
+      executablePageProtect[PAGE_EXECUTE_READWRITE]=true
+      executablePageProtect[PAGE_EXECUTE_WRITECOPY]=true
 
       local mr=enumMemoryRegions()
       for i=1,#mr do
@@ -1053,7 +1053,22 @@ function FindObjectArray(t) --and UObject name offset
         UEngine.ObjectArrayListType=0 --list of sequential pointers to ObjectArray entries
         p=readPointer(p) --p now points to the first object array entry
       else
-        UEngine.ObjectArrayListType=1 --list of Object entries (ot the list is just 1 long. Maybe launched too soon?)
+        --list of Object entries (or the list is just 1 long. Maybe launched too soon?)
+        UEngine.ObjectArrayListType=1
+
+        --check some more things, maybe it is just a short list
+        local ObjectListAddress=readPointer(p)
+        local FirstObject=readPointer(ObjectListAddress)
+        local vftable=readPointer(FirstObject)
+
+        if vftable then
+          local f1,f2,f3=readPointer(vftable), readPointer(vftable+8), readPointer(vftable+16)
+          if isInExecutableMainModuleMemory(f1) and isInExecutableMainModuleMemory(f2) and isInExecutableMainModuleMemory(f3) then
+            --3 valid pointers to executable memory. Guess it's just a small list  (single)
+            UEngine.ObjectArrayListType=0
+            p=ObjectListAddress
+          end
+        end
       end
 
       local goodrangestart=getAddress(process)
@@ -2084,7 +2099,8 @@ end
 function couldBeUnrealEngine()
   local pname=extractFileNameWithoutExt(process)
   if getAddressSafe(pname..'.agsInit') then return true end
-  if getAddressSafe(pname..'.NvOptimusEnablement') then return true end   
+  if getAddressSafe(pname..'.agsInitialize') then return true end
+  --if getAddressSafe(pname..'.NvOptimusEnablement') then return true end    --nope (kindergharten has this one as well)
   
   if pname:lower():endsWith('shipping') then return true end 
   
@@ -2162,7 +2178,7 @@ function LaunchUEInfoScanner()
 end
 
 local oldOnProcessOpened=MainForm.OnProcessOpened
-
+--[[
 MainForm.OnProcessOpened=function()
   if UEInfoScannerThread then
     UEInfoScannerThread.Terminate()
@@ -2173,4 +2189,4 @@ MainForm.OnProcessOpened=function()
   end
   local r=oldOnProcessOpened()  
 end
-
+--]]
