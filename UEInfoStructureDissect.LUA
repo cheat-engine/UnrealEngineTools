@@ -77,7 +77,7 @@ function UEngine_createStructureFromClass(address)
 
 
     if properties==nil then
-      printf("UClass_enumProperties(0x%x) returned nil",address)
+      --printf("UClass_enumProperties(0x%x) returned nil",address)
 
       return nil
     end
@@ -145,17 +145,17 @@ function UEngine_createStructureFromClass(address)
         e.Vartype=vtPointer
         e.ChildClassName='Type: 0x'..string.format("%x",readPointer(info.propertyAddress+UEngine.FProperty.ObjectClassType))
         e.OnCreateChild=function(element, address)
-          print("goobelywoo")
+         -- print("goobelywoo")
           local newstruct
           if address then
-            printf("Creating using address %x", address)
+           -- printf("Creating using address %x", address)
             newstruct=UEngine_createStructureFromObject(address) --prefer this as it might be an inherited object so it shows more fields
             if newstruct==nil then
               printf("awww")
             end
           end
           if newstruct==nil then
-            printf("Creating using info: %s", element.ChildClassName)
+           -- printf("Creating using info: %s", element.ChildClassName)
             local cstr=tonumber(element.ChildClassName:sub(7))
             if cstr then
               newstruct=UEngine_createStructureFromClass(cstr)
