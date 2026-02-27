@@ -5,13 +5,13 @@
 local function log(str)
   if UEngine==nil then
     UEngine={}
-    UEngine.processid=getOpenedProcessID()    
+    UEngine.processid=getOpenedProcessID()
   end
-  
+
   if UEngine.log==nil then
     UEngine.log=''
   end
-  
+
   UEngine.log=UEngine.log..str..'\n\r'
 end
 
@@ -608,12 +608,12 @@ function FindGEngine(t)
   ms.ScanCopyOnWrite='scanExclude'
 
   ms.scan()
-  
+
   log('FindGEngine: Starting scan for '..ms.Scanvalue)
-  
+
   ms.waitTillDone()
-  
-  log('FindGEngine: Scan finished')  
+
+  log('FindGEngine: Scan finished')
 
   sleep(1000)
 
@@ -627,8 +627,8 @@ function FindGEngine(t)
 
   ms.destroy()
   ms=nil
-  
-  log('FindGEngine: Next scan finished')    
+
+  log('FindGEngine: Next scan finished')
 
 
   if #r>=1 then
@@ -654,7 +654,7 @@ function FindGEngine(t)
   end
 
   if #r==0 then
-    log('FindGEngine: No direct GEngine found')    
+    log('FindGEngine: No direct GEngine found')
 
 
     --no instance found, maybe it created a subclass
@@ -949,7 +949,7 @@ __cdecl void ConvertBackRoutine(size_t input, unsigned long long address, unsign
 {$asm}]])if UObjectArray_Verifier_Type==nil and emsg then
     error(emsg)
   end
-  
+
   UObjectArray_Verifier_Type.InternalOnly=true
 end
 
@@ -965,7 +965,7 @@ function FindObjectArray(t) --and UObject name offset
       return nil,'No verifier type'
     end
   end
-  
+
   if UEngine.ObjectArray==nil then
 
     local ms=createMemScan()
@@ -1274,7 +1274,8 @@ end
 
 
 function CacheNamePool_old()
-  if NamePoolData_index_hash_string==nil then return nil,'NamePoolData_index_hash_string not defined yet' end
+  log('CacheNamePool_old')
+  if UEngine.NamePoolData==nil then return nil,'UEngine.NamePoolData not defined yet' end
 
 
   local N2I={}
@@ -1283,7 +1284,7 @@ function CacheNamePool_old()
   --copy and parse all the strings
 
   --each block is 0x20000 bytes long
-  --NamePool+0x8 holds a 4 byte with the count. Alternatively, the list ends with a NULL pointer
+  --the list ends with a NULL pointer
   local sdata=createMemoryStream()
   sdata.Size=0x20000
 
@@ -1292,11 +1293,11 @@ function CacheNamePool_old()
 
   local pointerlist=createMemoryStream()
   pointerlist.Size=8*count
-  if copyMemory(NamePoolData_index_hash_string,pointerlist.Size, pointerlist.Memory,1)==nil then return nil,'Read Failed' end
+  if copyMemory(UEngine.NamePoolData,pointerlist.Size, pointerlist.Memory,1)==nil then return nil,'Read Failed' end
 
 
   local stringCache={} --read blocks of 0x40000 bytes (index is address >> 17)
-  local StringOffset=FNameEntry.String
+  local StringOffset=UEngine.FNameEntry.String
 
   for i=1,count do
     local p=pointerlist.readQword()
@@ -1393,6 +1394,7 @@ function CacheNamePool_old()
 end
 
 function CacheNamePool(t)
+  log('CacheNamePool')
   --remember the comment at the top about debugging causing a slowdown?  That particularly means this function right here
 
   if UEngine.NamePoolData==nil then
@@ -1690,7 +1692,7 @@ function FindNamePoolData(t)
 
   if #r==1 then
     UEngine.NamePoolData = r[1] - 0x10 --todo: save this address for the next run
-    
+
     return true
   end
 end
@@ -1699,42 +1701,42 @@ function createUEMenu()
   log('Creating menuitem')
 
   synchronize(function()
-    
+
     if UEngine.GUI==nil then
       UEngine.GUI={}
     elseif UEngine.GUI.miUnrealEngine then
       UEngine.GUI.miUnrealEngine.destroy()
       UEngine.GUI.miUnrealEngine=nil
-      UEngine.GUI={} --clear everything under it 
+      UEngine.GUI={} --clear everything under it
     end
-    
+
     UEngine.GUI.miUnrealEngine=createMenuItem(MainForm)
     UEngine.GUI.miUnrealEngine.Caption='Initializing Unreal Engine'
     UEngine.GUI.miUnrealEngine.Name='miUnrealEngine'
-    
+
     UEngine.GUI.miStatus=createMenuItem(MainForm)
     UEngine.GUI.miStatus.Name='miStatus'
     UEngine.GUI.miStatus.Caption='Status'
     UEngine.GUI.miStatus.OnClick=function()
       if UEInfoScannerThread and (messageDialog('Cancel the Unreal Engine data collection?',mtConfirmation,mbYes, mbNo)==mrYes) then
-        UEInfoScannerThread.Terminate()        
+        UEInfoScannerThread.Terminate()
       end
     end
-    UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStatus)    
-    
+    UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStatus)
+
     UEngine.GUI.miHurry=createMenuItem(MainForm)
     UEngine.GUI.miHurry.Name='miHurry'
     UEngine.GUI.miHurry.Caption='Prioritize this'
     UEngine.GUI.miHurry.OnClick=function()
       if UEInfoScannerThread then
-        UEInfoScannerThread.Priority='tpHigher'  
+        UEInfoScannerThread.Priority='tpHigher'
       end
       UEngine.GUI.miHurry.destroy()
-      UEngine.GUI.miHurry=nil      
+      UEngine.GUI.miHurry=nil
     end
-    UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miHurry)    
-    
-    
+    UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miHurry)
+
+
     MainForm.Menu.Items.insert(MainForm.miHelp.MenuIndex, UEngine.GUI.miUnrealEngine)
   end)
 
@@ -1743,14 +1745,14 @@ end
 
 function UEInfoScanner(t)
   --can be called directly or with a thread
-  
+
   log('UEInfoScanner start');
-  
+
   local id=process..'-'..md5memory(getAddressSafe(process),4096)
-  
+
   local s=getSettings("UEInfo\\"..id,true)
   local r
-  
+
   --get data from the registry if available
   if t then
     log('Threaded')
@@ -1763,13 +1765,13 @@ function UEInfoScanner(t)
     UEngine={}
     UEngine.processid=getOpenedProcessID()
   end
-  
+
   --[[
-  check the settings if everything has already been found, or if only a subset was found so far. 
+  check the settings if everything has already been found, or if only a subset was found so far.
   If only a subset, go through the whole thing, but if everything was found then load all from the registry, but still
-  go through the string cache system  
+  go through the string cache system
   --]]
-  
+
   if (s.fullyParsed) then
     log('The state was fully parsed. Using this')
     --load all fields and offsets
@@ -1778,37 +1780,47 @@ function UEInfoScanner(t)
     for name,value in pairs(list) do
       if name:startsWith('UEngine.') then
         local sections=table.pack(name:split('.'))
-        
+
         local t=UEngine
         for i=2,#sections-1 do
           local newt=t[sections[i]]
           if newt==nil then
             t[sections[i]]={}
-            
+
             newt=t[sections[i]]
-          end         
-          
-          t=newt        
+          end
+
+          t=newt
         end
-        
-        t[sections[#sections]]=tonumber(value)
-      end   
+
+       
+        t[sections[#sections]]=tonumber(value)       
+      end
     end
-    
+
     --cache the namepool data
     createUEMenu()
-    
+
     UEngine.NamePoolData=getAddressSafe(s.NamePoolData)
     UEngine.ObjectArray=getAddressSafe(s.ObjectArray)
     UEngine.GEngine=getAddressSafe(s.GEngine)
-    
-    
+
+
     --todo: use the function method instead until specifically requested to cache the names
     log('Loading string table')
     synchronize(function()
-      UEngine.GUI.miStatus.Caption='Loading string table' 
+      UEngine.GUI.miStatus.Caption='Loading string table'
     end)
-  
+    
+    if UEngine.NamePoolData==nil then
+      --can happen in the old stringpool format
+      local r,err=FindNamePoolData(t)    
+      if not r then
+        log('Failed searching for NamePool:'..err)
+        return nil,'FindNamePoolData failed:'..err
+      end      
+    end
+
     local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
     local err
     r,err=CacheNamePool(t)
@@ -1818,16 +1830,16 @@ function UEInfoScanner(t)
     if not r then
       return nil,'CacheNamePool failed:'..err
     end
-    
-    SetupNamePoolLookupType() --the cache is done. make it available to the user
-    
 
-    
-    
-    
-    
+    SetupNamePoolLookupType() --the cache is done. make it available to the user
+
+
+
+
+
+
     r=true
-   
+
   else
     log('New or incomplete state')
     if UEngine.NamePoolData==nil then
@@ -1835,8 +1847,8 @@ function UEInfoScanner(t)
       if sNamePoolData then
         UEngine.NamePoolData=getAddressSafe(sNamePoolData)
         log('NamePoolData was previously at '..sNamePoolData..' . Using that')
-      end 
-    end   
+      end
+    end
 
     if UEngine.NamePoolData==nil then
       log('Searching for NamePool')
@@ -1845,34 +1857,38 @@ function UEInfoScanner(t)
         log('Failed searching for NamePool:'..err)
         return nil,'FindNamePoolData failed:'..err
       end
-      
-      s.NamePoolData=getNameFromAddress(UEngine.NamePoolData)        
+
+      local n=getNameFromAddress(UEngine.NamePoolData)
+      if n:find(extractFileNameWithoutExt(process)) then
+        --it's a module address. Save it
+        s.NamePoolData=getNameFromAddress(UEngine.NamePoolData)
+      end
     end
-    
-    
+
+
 
     if t and t.Terminated then return nil,'UEInfoScanner terminated' end
 
     --still here, notify that there is some unreal info available
 
     createUEMenu()
-    
 
-    if UEngine.NameToIndex == nil then  
+
+    if UEngine.NameToIndex == nil then
       log('Loading string table')
       synchronize(function()
-        UEngine.GUI.miStatus.Caption='Loading string table' 
+        UEngine.GUI.miStatus.Caption='Loading string table'
       end)
-    
-      local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
+
+      --local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
       local r,err=CacheNamePool(t)
-      restoreLuaDebug(originalDebugState)
+      --restoreLuaDebug(originalDebugState)
 
 
       if not r then
         return nil,'CacheNamePool failed:'..err
       end
-      
+
       SetupNamePoolLookupType() --the cache is done. make it available to the user
     end
 
@@ -1884,30 +1900,30 @@ function UEInfoScanner(t)
         UEngine.ObjectArray=getAddressSafe(sObjectArray)
       end
     end
-      
-    if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then  
+
+    if (UEngine.ObjectArray == nil) or (UEngine.UObject==nil) then
       log('Scanning for object table')
       synchronize(function()
-        UEngine.GUI.miStatus.Caption='Scanning for object table' 
+        UEngine.GUI.miStatus.Caption='Scanning for object table'
       end)
-    
 
-    
+
+
       local r,err=FindObjectArray(t)
       if not r then
         return nil,'FindObjectArray failed:'..err
       end
-      s.ObjectArray=getNameFromAddress(UEngine.ObjectArray)    
-      
+      s.ObjectArray=getNameFromAddress(UEngine.ObjectArray)
+
     end
 
-    if UEngine.UGameEngine==nil then     
+    if UEngine.UGameEngine==nil then
       log('Searching for GEngine')
       synchronize(function()
-        UEngine.GUI.miStatus.Caption='Searching for GEngine' 
+        UEngine.GUI.miStatus.Caption='Searching for GEngine'
       end)
-    
-    
+
+
       local r,err=FindGEngine(t)
       log('FindGEngine returned')
       if not r then
@@ -1918,12 +1934,12 @@ function UEInfoScanner(t)
         end
         return nil,'FindGEngine failed:'..err
       end
-      
-      s.GEngine=getNameFromAddress(UEngine.UGameEngine)        
+
+      s.GEngine=getNameFromAddress(UEngine.GEngine)
     end
 
     if UEngine.UObject.Class==nil then --normal situation
-      log('Figuring out the "class" offset')  
+      log('Figuring out the "class" offset')
       for i=1,32 do --skip 0 as it's the vftable
         local n=UObject_getName(readPointer(UGameEngine+i*4))
         if n and n=='GameEngine' then
@@ -1934,7 +1950,7 @@ function UEInfoScanner(t)
     end
 
     if UEngine.UObject.Class==nil then
-      log('Failed finding the "class" offset')    
+      log('Failed finding the "class" offset')
       return nil,'UObject.Class not found'
     end
 
@@ -2018,55 +2034,59 @@ function UEInfoScanner(t)
     end
 
     --everything ok so far. Try to find the layout of Property Field objects.  Can be either UProperty or FProperty. Doesn't matter
-    
-    log('Figuring out the other offsets (findGameInstanceFPropertyAndFields) ')  
+
+    log('Figuring out the other offsets (findGameInstanceFPropertyAndFields) ')
     synchronize(function()
-      UEngine.GUI.miStatus.Caption='Figuring out offsets' 
+      UEngine.GUI.miStatus.Caption='Figuring out offsets'
     end)
-    
-    
+
+
     r=findGameInstanceFPropertyAndFields(t)
   end
 
   if r then
     if s.fullyParsed==nil then
       --save all offsets
-     
+
       function saveLuaTable(tablename,t)
         if t then
           for name,value in pairs(t) do
             local n=tablename..'.'..name
-            
+
             if type(value)=='table' then
               saveLuaTable(n,value)
             else
               s[n]=tostring(value)
             end
-            
+
           end
         end
       end
-      
+
       saveLuaTable('UEngine.FNameEntry', UEngine.FNameEntry)
       saveLuaTable('UEngine.UObject', UEngine.UObject)
       saveLuaTable('UEngine.UStruct', UEngine.UStruct)
       saveLuaTable('UEngine.UClass', UEngine.UClass)
       saveLuaTable('UEngine.FProperty', UEngine.FProperty)
-      saveLuaTable('UEngine.FFieldClass', UEngine.FFieldClass)      
-      saveLuaTable('UEngine.FField', UEngine.FField)   
+      saveLuaTable('UEngine.FFieldClass', UEngine.FFieldClass)
+      saveLuaTable('UEngine.FField', UEngine.FField)
+
 
       s['UEngine.VFTableInExecutableMemoryMethod']=UEngine.VFTableInExecutableMemoryMethod
       s['UEngine.ObjectArrayListType']=UEngine.ObjectArrayListType
-      s['UEngine.ObjectArrayEntryStructSize']=UEngine.ObjectArrayEntryStructSize      
-      
+      s['UEngine.ObjectArrayEntryStructSize']=UEngine.ObjectArrayEntryStructSize
+      s['UEngine.NamePoolData_old']=UEngine.NamePoolData_old  --nil if not set
+
+
+
       s.fullyParsed=true
     end
-    
+
     log('success. Registering structure lookup callback')
     if registerUEngineStructureLookupCallbacks then --added by UEInfoStructureDissect
       synchronize(function()
         registerUEngineStructureLookupCallbacks()
-        
+
         --It can be annoying, so add an option to disable it for now
         UEngine.GUI.miStructureDissectCallbackStatus=createMenuItem(MainForm)
         UEngine.GUI.miStructureDissectCallbackStatus.Caption='Use when dissecting structures'
@@ -2080,10 +2100,10 @@ function UEInfoScanner(t)
             unregisterUEngineStructureLookupCallbacks()
           end
         end
-        
+
         UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miStructureDissectCallbackStatus)
-        
-        
+
+
         UEngine.GUI.miStatus.destroy()
         UEngine.GUI.miStatus=nil
 
@@ -2091,11 +2111,11 @@ function UEInfoScanner(t)
           UEngine.GUI.miHurry.destroy()
           UEngine.GUI.miHurry=nil
         end
-        
+
         UEngine.GUI.miUnrealEngine.Caption='Unreal Engine'
-      end)      
+      end)
     end
-    
+
     return r
   end
 end
@@ -2105,30 +2125,30 @@ function couldBeUnrealEngine()
   if getAddressSafe(pname..'.agsInit') then return true end
   if getAddressSafe(pname..'.agsInitialize') then return true end
   --if getAddressSafe(pname..'.NvOptimusEnablement') then return true end    --nope (kindergharten has this one as well)
-  
-  if pname:lower():endsWith('shipping') then return true end 
-  
-  
+
+  if pname:lower():endsWith('shipping') then return true end
+
+
   local r=enumModules()
   if r then
     local v,res=getFileVersion(r[1].PathToFile)
     if res then
       if res.ProductVersion and res.ProductVersion:find('%+UE4') then return true end
-      if res.ProductVersion and res.ProductVersion:find('%+UE5') then return true end     
-      
+      if res.ProductVersion and res.ProductVersion:find('%+UE5') then return true end
+
     end
   end
-  
+
   return false
 end
 
 function WaitForUnrealEngineInfo(timeout)
   if UEInfoScannerThread then
     UEInfoScannerThread.Priority='tpHigher'
-  
-    return UEInfoScannerThread.waitForThread(timeout)    
+
+    return UEInfoScannerThread.waitForThread(timeout)
   end
-  
+
   return true
 end
 
@@ -2141,21 +2161,21 @@ function LaunchUEInfoScanner()
     UEInfoScannerThread=nil
   end
   UEInfoScannerThread=createThread(function(t)
-    
+
     log('UEInfoScannerThread started')
-   
-  
+
+
     t.Priority='tpIdle'
-    local r,err=UEInfoScanner(t)  
+    local r,err=UEInfoScanner(t)
 
     log('UEInfoScannerThread finished')
     if r then
       log('UEInfoScanner: Success')
-      synchronize(function()    
+      synchronize(function()
         UEngine.GUI.miUnrealEngine.caption='Unreal Engine'
       end)
-      
-  
+
+
     else
       if err then
         log('UEInfoScanner failure:'..err)
@@ -2168,10 +2188,10 @@ function LaunchUEInfoScanner()
           UEngine.GUI=nil
         end
       end)
-      
+
     end
-    
-    
+
+
     --if err then
     --  print(err)
     --end
@@ -2179,15 +2199,17 @@ function LaunchUEInfoScanner()
 end
 
 local oldOnProcessOpened=MainForm.OnProcessOpened
-
+--[[
 MainForm.OnProcessOpened=function()
   if UEInfoScannerThread then
     UEInfoScannerThread.Terminate()
   end
-  
+
   if couldBeUnrealEngine() then
     LaunchUEInfoScanner()
   end
-  local r=oldOnProcessOpened()  
+  local r=oldOnProcessOpened()
 end
+--]]
+
 
