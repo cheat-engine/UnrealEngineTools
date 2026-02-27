@@ -801,7 +801,7 @@ function FindGEngine(t)
   if #r==1 then
     UEngine.GEngine=r[1]
     unregisterSymbol('GEngine')
-    registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine))
+    registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine), true)
   end
 
   ms.destroy()
@@ -1142,7 +1142,7 @@ function FindObjectArray(t) --and UObject name offset
       if #validpointers<=1 then
         return false,"can't find figure out ObjectArrayEntryStruct size"
       end
-      ObjectArrayEntryStructSize=validpointers[2]-validpointers[1]
+      UEngine.ObjectArrayEntryStructSize=validpointers[2]-validpointers[1]
 
 
 
@@ -1800,7 +1800,10 @@ function UEInfoScanner(t)
     
     UEngine.NamePoolData=getAddressSafe(s.NamePoolData)
     UEngine.ObjectArray=getAddressSafe(s.ObjectArray)
+    UEngine.GEngine=getAddressSafe(s.GEngine)
     
+    
+    --todo: use the function method instead until specifically requested to cache the names
     log('Loading string table')
     synchronize(function()
       UEngine.GUI.miStatus.Caption='Loading string table' 
@@ -1915,6 +1918,8 @@ function UEInfoScanner(t)
         end
         return nil,'FindGEngine failed:'..err
       end
+      
+      s.GEngine=getNameFromAddress(UEngine.UGameEngine)        
     end
 
     if UEngine.UObject.Class==nil then --normal situation
@@ -2052,8 +2057,7 @@ function UEInfoScanner(t)
 
       s['UEngine.VFTableInExecutableMemoryMethod']=UEngine.VFTableInExecutableMemoryMethod
       s['UEngine.ObjectArrayListType']=UEngine.ObjectArrayListType
-      
-      
+      s['UEngine.ObjectArrayEntryStructSize']=UEngine.ObjectArrayEntryStructSize      
       
       s.fullyParsed=true
     end
@@ -2149,11 +2153,8 @@ function LaunchUEInfoScanner()
       log('UEInfoScanner: Success')
       synchronize(function()    
         UEngine.GUI.miUnrealEngine.caption='Unreal Engine'
-        UEngine.GUI.miUnrealEngine.destroy()
       end)
       
-      --store some data for this specific version, to speed up next run
-  
   
     else
       if err then
@@ -2178,7 +2179,7 @@ function LaunchUEInfoScanner()
 end
 
 local oldOnProcessOpened=MainForm.OnProcessOpened
---[[
+
 MainForm.OnProcessOpened=function()
   if UEInfoScannerThread then
     UEInfoScannerThread.Terminate()
@@ -2189,4 +2190,4 @@ MainForm.OnProcessOpened=function()
   end
   local r=oldOnProcessOpened()  
 end
---]]
+
