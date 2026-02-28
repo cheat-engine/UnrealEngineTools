@@ -2199,7 +2199,7 @@ function LaunchUEInfoScanner()
 end
 
 local oldOnProcessOpened=MainForm.OnProcessOpened
---[[
+
 MainForm.OnProcessOpened=function()
   if UEInfoScannerThread then
     UEInfoScannerThread.Terminate()
@@ -2210,6 +2210,5 @@ MainForm.OnProcessOpened=function()
   end
   local r=oldOnProcessOpened()
 end
---]]
 
 
