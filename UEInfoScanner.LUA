@@ -192,9 +192,7 @@ function GetLinkedListSize(p,LinkOffset)
 end
 
 function UEngine_findStructureStart(address)
-  address=address & 0xfffffffffffffff0
-
-
+  address=address & 0xfffffffffffffff8
 
   c=0
   while c<100 do
@@ -223,6 +221,7 @@ function findGameInstanceFPropertyAndFields(t)
   ms.Fastscanmethod=fsmAligned
   ms.Fastscanparameter=4
 
+  log('scanning GameInstance')
   ms.scan()
 
   local r=ms.Results
@@ -748,6 +747,8 @@ function FindGEngine(t)
           ms.ScanWritable='scanInclude'
           ms.ScanExecutable='scanExclude'
           ms.ScanCopyOnWrite='scanExclude'
+          
+          log('scanning for '..ms.Scanvalue)
 
           ms.scan()
           r2=ms.Results
@@ -801,7 +802,10 @@ function FindGEngine(t)
   if #r==1 then
     UEngine.GEngine=r[1]
     unregisterSymbol('GEngine')
-    registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine), true)
+    local n=getNameFromAddress(UEngine.GEngine,true,false,false)
+    if n:find(extractFileNameWithoutExt(process)) then    
+      registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine), true)
+    end
   end
 
   ms.destroy()
@@ -1762,6 +1766,17 @@ function UEInfoScanner(t)
 
   if UEngine==nil or UEngine.processid~=getOpenedProcessID() then
     --start from scratch
+    if UEngineStructDissect then
+      unregisterStructureDissectOverride2(UEngineStructDissect)
+      UEngineStructDissect=nil
+    end
+  
+    if UEngine.GUI then
+      if UEngine.GUI.miUnrealEngine then
+        UEngine.GUI.miUnrealEngine.destroy()        
+        UEngine.GUI=nil
+      end
+    end
     UEngine={}
     UEngine.processid=getOpenedProcessID()
   end
@@ -1804,6 +1819,13 @@ function UEInfoScanner(t)
     UEngine.NamePoolData=getAddressSafe(s.NamePoolData)
     UEngine.ObjectArray=getAddressSafe(s.ObjectArray)
     UEngine.GEngine=getAddressSafe(s.GEngine)
+    
+    if UEngine.GEngine then
+      local n=getNameFromAddress(UEngine.GEngine,true,false,false)
+      if n:find(extractFileNameWithoutExt(process)) then
+        registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine), true)
+      end
+    end
 
 
     --todo: use the function method instead until specifically requested to cache the names
@@ -1858,7 +1880,7 @@ function UEInfoScanner(t)
         return nil,'FindNamePoolData failed:'..err
       end
 
-      local n=getNameFromAddress(UEngine.NamePoolData)
+      local n=getNameFromAddress(UEngine.NamePoolData,true,false,false)
       if n:find(extractFileNameWithoutExt(process)) then
         --it's a module address. Save it
         s.NamePoolData=getNameFromAddress(UEngine.NamePoolData)
@@ -1880,9 +1902,9 @@ function UEInfoScanner(t)
         UEngine.GUI.miStatus.Caption='Loading string table'
       end)
 
-      --local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
+      local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
       local r,err=CacheNamePool(t)
-      --restoreLuaDebug(originalDebugState)
+      restoreLuaDebug(originalDebugState)
 
 
       if not r then
@@ -1913,7 +1935,7 @@ function UEInfoScanner(t)
       if not r then
         return nil,'FindObjectArray failed:'..err
       end
-      s.ObjectArray=getNameFromAddress(UEngine.ObjectArray)
+      s.ObjectArray=getNameFromAddress(UEngine.ObjectArray, true, false,false)
 
     end
 
@@ -1934,8 +1956,10 @@ function UEInfoScanner(t)
         end
         return nil,'FindGEngine failed:'..err
       end
+      
+      
 
-      s.GEngine=getNameFromAddress(UEngine.GEngine)
+      s.GEngine=getNameFromAddress(UEngine.GEngine,true,false,false)
     end
 
     if UEngine.UObject.Class==nil then --normal situation

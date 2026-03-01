@@ -35,6 +35,24 @@ function UEngine_createStructureFromClass(address)
     e.Offset=UEngine.UClass.Class
     e.VarType=vtPointer
     e.ChildStruct=UClassStruct
+    e.PreviewPriority=2
+    
+    e=UClassStruct.addElement()
+    e.Name='SuperStruct'
+    e.Offset=UEngine.UClass.SuperStruct 
+    e.VarType=vtPointer
+    e.ChildStruct=UClassStruct
+    
+    e=UClassStruct.addElement()
+    e.Name='PropertyLink'
+    e.Offset=UEngine.UClass.PropertyLink
+    e.VarType=vtPointer
+    
+    e=UClassStruct.addElement()
+    e.Name='PropertyLink (fallback)'
+    e.Offset=UEngine.UClass.PropertyLinkAlt
+    e.VarType=vtPointer    
+    
 
     UClassStruct.addToGlobalStructureList()
   end
@@ -59,6 +77,12 @@ function UEngine_createStructureFromClass(address)
     e.Offset=UEngine.UObject.Class
     e.VarType=vtPointer
     e.ChildStruct=UClassStruct
+   
+    e.PreviewPriority=2
+    
+    if UClassStruct==nil then
+      print("UClassStruct==nil")
+    end
 
     UObjectStruct.addToGlobalStructureList()
   end
@@ -76,112 +100,112 @@ function UEngine_createStructureFromClass(address)
     --end
 
 
-    if properties==nil then
+    if properties==nil and name==nil then
       --printf("UClass_enumProperties(0x%x) returned nil",address)
-
       return nil
     end
-
-
+    
     s=UObjectStruct.clone(name)
     local e
 
-    for name,info in pairs(properties) do
-      e=s.addElement()
-      e.Name=name
-      e.Offset=info.offset
-      e.Vartype=vtPointer --default
+    if properties then
+      for name,info in pairs(properties) do
+        e=s.addElement()
+        e.Name=name
+        e.Offset=info.offset
+        e.Vartype=vtPointer --default
 
-      if info.propertyType=='BoolProperty' then
-        local bit=readByte(info.propertyAddress+UEngine.FProperty.BitMaskField+2)
-        local bitnr=bitbytetobitnr[bit]
-        if bitnr then
-          e.Vartype=vtBinary
-          e.BitStart=bitnr
-          e.BitSize=1
-        else
+        if info.propertyType=='BoolProperty' then
+          local bit=readByte(info.propertyAddress+UEngine.FProperty.BitMaskField+2)
+          local bitnr=bitbytetobitnr[bit]
+          if bitnr then
+            e.Vartype=vtBinary
+            e.BitStart=bitnr
+            e.BitSize=1
+          else
+            e.Vartype=vtByte
+          end
+        end
+
+        if info.propertyType=='IntProperty' then
+          e.Vartype=vtDword
+        end
+
+        if info.propertyType=='ByteProperty' then
           e.Vartype=vtByte
         end
-      end
 
-      if info.propertyType=='IntProperty' then
-        e.Vartype=vtDword
-      end
-
-      if info.propertyType=='ByteProperty' then
-        e.Vartype=vtByte
-      end
-
-      if info.propertyType=='FloatProperty' then
-        if readInteger(info.propertyAddress+UEngine.FProperty.Size)==4 then
-          e.Vartype=vtSingle
-        else
-          e.Vartype=vtDouble
-        end
-      end
-
-      if info.propertyType=='StructProperty' then
-        --not sure, but
-        if name:endsWith('Name') then
-          e.Vartype=vtCustom
-          e.CustomTypeName='UE FName to String'
-        else
-          e.Vartype=vtByteArray
-          e.ByteSize=readInteger(info.propertyAddress+UEngine.FProperty.Size)
-        end
-      end
-
-      if info.propertyType=='StrProperty' then
-        e.Vartype=vtPointer
-        e.ChildStruct=getStructure('widestring')
-      end
-
-      if info.propertyType=='ClassProperty' then
-        e.Vartype=vtPointer
-        e.ChildStruct=getStructure('UClass')
-      end
-
-      if info.propertyType=='ObjectProperty' then
-        e.Vartype=vtPointer
-        e.ChildClassName='Type: 0x'..string.format("%x",readPointer(info.propertyAddress+UEngine.FProperty.ObjectClassType))
-        e.OnCreateChild=function(element, address)
-         -- print("goobelywoo")
-          local newstruct
-          if address then
-           -- printf("Creating using address %x", address)
-            newstruct=UEngine_createStructureFromObject(address) --prefer this as it might be an inherited object so it shows more fields
-            if newstruct==nil then
-              printf("awww")
-            end
-          end
-          if newstruct==nil then
-           -- printf("Creating using info: %s", element.ChildClassName)
-            local cstr=tonumber(element.ChildClassName:sub(7))
-            if cstr then
-              newstruct=UEngine_createStructureFromClass(cstr)
-            end
-          end
-
-          if newstruct then
-            --print("Weeeeee")
-            return newstruct
+        if info.propertyType=='FloatProperty' then
+          if readInteger(info.propertyAddress+UEngine.FProperty.Size)==4 then
+            e.Vartype=vtSingle
           else
-            --if messageDialog('Couldn''t figure out the structure. Let CE try?',mtConfirmation,mbYes,mbNo)==mrYes then
-            --  return nil,true --let CE try it
-            --else
-             -- print("humbug")
-              return nil
-            --end
+            e.Vartype=vtDouble
           end
         end
+
+        if info.propertyType=='StructProperty' then
+          --not sure, but
+          if name:endsWith('Name') then
+            e.Vartype=vtCustom
+            e.CustomTypeName='UE FName to String'
+          else
+            e.Vartype=vtByteArray
+            e.ByteSize=readInteger(info.propertyAddress+UEngine.FProperty.Size)
+          end
+        end
+
+        if info.propertyType=='StrProperty' then
+          e.Vartype=vtPointer
+          e.ChildStruct=getStructure('widestring')
+        end
+
+        if info.propertyType=='ClassProperty' then
+          e.Vartype=vtPointer
+          e.ChildStruct=getStructure('UClass')
+        end
+
+        if info.propertyType=='ObjectProperty' then
+          e.Vartype=vtPointer
+          e.ChildClassName='Type: 0x'..string.format("%x",readPointer(info.propertyAddress+UEngine.FProperty.ObjectClassType))
+          e.OnCreateChild=function(element, address)
+           -- print("goobelywoo")
+            local newstruct
+            if address then
+             -- printf("Creating using address %x", address)
+              newstruct=UEngine_createStructureFromObject(address) --prefer this as it might be an inherited object so it shows more fields
+              if newstruct==nil then
+                --printf("awww")
+              end
+            end
+            if newstruct==nil then
+             -- printf("Creating using info: %s", element.ChildClassName)
+              local cstr=tonumber(element.ChildClassName:sub(7))
+              if cstr then
+                newstruct=UEngine_createStructureFromClass(cstr)
+              end
+            end
+
+            if newstruct then
+              --print("Weeeeee")
+              return newstruct
+            else
+              --if messageDialog('Couldn''t figure out the structure. Let CE try?',mtConfirmation,mbYes,mbNo)==mrYes then
+              --  return nil,true --let CE try it
+              --else
+               -- print("humbug")
+                return nil
+              --end
+            end
+          end
+        end
+
+
+        if e.ChildClassName=='' then
+          e.ChildClassName=string.format('Property: %x',info.propertyAddress)
+        end
+
+
       end
-
-
-      if e.ChildClassName=='' then
-        e.ChildClassName=string.format('Property: %x',info.propertyAddress)
-      end
-
-
     end
 
 
@@ -198,14 +222,16 @@ function unregisterUEngineStructureLookupCallbacks()
     unregisterStructureNameLookup(UEngineStructNameLookup)
     UEngineStructNameLookup=nil
   end
+  
+  if UEngineStructDissect then
+    unregisterStructureDissectOverride2(UEngineStructDissect)
+    UEngineStructDissect=nil
+  end
 end
 
 function registerUEngineStructureLookupCallbacks()
   --register a structure dissect that gets the base address and dissects it
-  if UEngineStructNameLookup then
-    unregisterStructureNameLookup(UEngineStructNameLookup)
-    UEngineStructNameLookup=nil
-  end
+  unregisterUEngineStructureLookupCallbacks() --get rid of them first
 
   UEngineStructNameLookup=registerStructureNameLookup(function(address)
     local obj=UEngine_findStructureStart(address)
@@ -229,10 +255,49 @@ function registerUEngineStructureLookupCallbacks()
   end
 
   UEngineStructDissect=registerStructureDissectOverride2(function(address)
-    if UEngine_findStructureStart(address) then
+    local actual=UEngine_findStructureStart(address)
+    
+    if actual==address then    
       local s=UEngine_createStructureFromObject(address)
+      
+      if s then
+        --search for gaps and if they are pointers and valid objects fill them in as uninitialized pointers
+        
+        
+        local maxoffset=s[s.Count-1].offset
+        for i=0,maxoffset,8 do
+          
+          local x=s.getElementByOffset(i)
+          if s.getElementByOffsetExact(i)==nil then            
+            
+            local a=readPointer(address+i)
+            local name=UObject_getName(a)
+            
+            if name and name~='None' then
+              
+              --get the class
+              local class=readPointer(a+UEngine.UObject.Class)
+              if class and class~=0 then
+               
+                local classname=UObject_getName(class)
+                
+                if classname and classname~='None' then
+                  --add it as an undefined pointer
+                  local e=s.addElement()
+                  e.offset=i
+                  e.Name=name..' : '..classname
+                  e.VarType=vtPointer
+                  e.ChildStruct=nil
+                end              
+              end            
+            end            
+          end
+        end
+      end
+      
       return s
     else
+      print("no idea")
       return nil --let CE guess it
     end
   end)
