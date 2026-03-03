@@ -1084,17 +1084,21 @@ function FindObjectArray(t) --and UObject name offset
       local object1=readPointer(p)
       local vftable=readPointer(object1)
       local firstfunctionaddress=readPointer(vftable) --get the address of the first function pointed at in the vftable
-      for i=1,#sections do
-        if firstfunctionaddress>=sections[i].Address and firstfunctionaddress<sections[i].Address+sections[i].Size then
-          if sections[i].IsCode and sections[i].IsExecutable then
-            --valid. Use this as a template for all future vtable rules (if not, then try the other methods described later)
-            UEngine.ExecutableRanges={}
-            UEngine.ExecutableRanges[1]={}
-            UEngine.ExecutableRanges[1].start=sections[i].Address
-            UEngine.ExecutableRanges[1].stop=sections[i].Address+sections[i].Size
+      if firstfunctionaddress then
+        for i=1,#sections do
+          if firstfunctionaddress>=sections[i].Address and firstfunctionaddress<sections[i].Address+sections[i].Size then
+            if sections[i].IsCode and sections[i].IsExecutable then
+              --valid. Use this as a template for all future vtable rules (if not, then try the other methods described later)
+              UEngine.ExecutableRanges={}
+              UEngine.ExecutableRanges[1]={}
+              UEngine.ExecutableRanges[1].start=sections[i].Address
+              UEngine.ExecutableRanges[1].stop=sections[i].Address+sections[i].Size
+            end
+            break
           end
-          break
         end
+      else
+        log('FindObjectArray: doesn\'t look like a valid object') 
       end
 
 
@@ -2154,7 +2158,7 @@ function couldBeUnrealEngine()
 
 
   local r=enumModules()
-  if r then
+  if r and #r>0 then
     local v,res=getFileVersion(r[1].PathToFile)
     if res then
       if res.ProductVersion and res.ProductVersion:find('%+UE4') then return true end
