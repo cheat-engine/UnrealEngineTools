@@ -1,6 +1,7 @@
 --UEInfoScanner and UEInfoStructureDissect are licensed under the MIT License by Eric Heijnen / Cheat Engine
 --https://github.com/cheat-engine/UnrealEngineTools
 
+local debugUEInfoScanner=true
 
 local function log(str)
   if UEngine==nil then
@@ -1756,10 +1757,13 @@ function UEInfoScanner(t)
 
   log('UEInfoScanner start');
   
+  if process==nil then return false,'No process selected' end
+  
   local versionid=md5memory(getAddressSafe(process),4096)
   
   if versionid==nil then
-    return log('main module unreadable')
+    log('main module unreadable')
+    return false    
   end
 
   local id=process..'-'..versionid
@@ -2156,10 +2160,13 @@ end
 
 function couldBeUnrealEngine()
   local pname=extractFileNameWithoutExt(process)
+  if pname==nil then return false end
+  
   if getAddressSafe(pname..'.agsInit') then return true end
   if getAddressSafe(pname..'.agsInitialize') then return true end
   --if getAddressSafe(pname..'.NvOptimusEnablement') then return true end    --nope (kindergharten has this one as well)
 
+   
   if pname:lower():endsWith('shipping') then return true end
 
 
@@ -2236,11 +2243,15 @@ local oldOnProcessOpened=MainForm.OnProcessOpened
 
 MainForm.OnProcessOpened=function(...)
   
+  local pid=getOpenedProcessID()
+  if (pid==0xffffffff) or (pid==0xfffffffe) then return end
+  
   if UEInfoScannerThread then
     UEInfoScannerThread.Terminate()
   end
   
-  createThread(function()
+  createThread(function(t)
+    t.name='Check if Unreal Engine'
     waitForExports()
     if couldBeUnrealEngine() then
       LaunchUEInfoScanner()
@@ -2248,10 +2259,14 @@ MainForm.OnProcessOpened=function(...)
       if getProcessAge and getProcessAge()<30000 then --newly created
         sleep(30000) --wait for the game to load
         if couldBeUnrealEngine() then
-          LaunchUEInfoScanner()
+          if getOpenedProcessID()==pid then
+            LaunchUEInfoScanner()
+          end
         end
       end
-    end    
+    end 
+    
+   
   end)
 
   local r=oldOnProcessOpened(...)
