@@ -106,6 +106,8 @@ function UEngine_createStructureFromClass(address)
     end
     
     s=UObjectStruct.clone(name)
+    if s==nil then return nil end --e.g. invalid name
+    
     local e
 
     if properties then
@@ -297,7 +299,7 @@ function registerUEngineStructureLookupCallbacks()
       
       return s
     else
-      print("no idea")
+      --print("no idea")
       return nil --let CE guess it
     end
   end)

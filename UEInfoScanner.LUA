@@ -1245,6 +1245,8 @@ function FindObjectArray(t) --and UObject name offset
     end
 
     return true
+  else
+    return false, 'FindObjectArray needs more filtering'
   end
 end
 
@@ -1947,7 +1949,11 @@ function UEInfoScanner(t)
 
       local r,err=FindObjectArray(t)
       if not r then
-        return nil,'FindObjectArray failed:'..err
+        if err then
+          return nil,'FindObjectArray failed:'..err
+        else
+          return nil,'FindObjectArray failed. No error given'
+        end
       end
       s.ObjectArray=getNameFromAddress(UEngine.ObjectArray, true, false,false)
 
