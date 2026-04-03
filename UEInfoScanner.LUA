@@ -1761,10 +1761,25 @@ function UEInfoScanner(t)
   
   if process==nil then return false,'No process selected' end
   
-  local versionid=md5memory(getAddressSafe(process),4096)
+  local versionid
+  --get the md5 from the first bytes of the file. That's enough to see if anything changed (pe crc field)
+  --'some' games get the loaded memory PE file tampered with (prefered image base gets set) so prefer the file for this
+  
+  local r,r2=pcall(function()
+    local fs=createFileStream(enumModules()[1].PathToFile, fmOpenRead) 
+    local b=f.read(1024)
+    fs.destroy()  
+    
+    local s=byteTableToString(b)
+    versionid=stringToMD5String(s)    
+  end)
+  
+  if versionid==nil then  
+    versionid=md5memory(getAddressSafe(process),4096)
+  end
   
   if versionid==nil then
-    log('main module unreadable')
+    log('file and main module unreadable')
     return false    
   end
 
@@ -1839,7 +1854,7 @@ function UEInfoScanner(t)
     if UEngine.GEngine then
       local n=getNameFromAddress(UEngine.GEngine,true,false,false)
       if n:find(extractFileNameWithoutExt(process),nil,true) then
-        registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine), true)
+        registerSymbol('GEngine',n, true)
       end
     end
 
