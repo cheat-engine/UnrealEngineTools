@@ -800,12 +800,22 @@ function FindGEngine(t)
   ms.Stopaddress=getAddress(process)+getModuleSize(process)
   ms.scan()
   r=ms.Results
-  if #r==1 then
+  if #r>=1 then --could be more than 1
     UEngine.GEngine=r[1]
     unregisterSymbol('GEngine')
     local n=getNameFromAddress(UEngine.GEngine,true,false,false)
-    if n:find(extractFileNameWithoutExt(process),nil,true) then    
-      registerSymbol('GEngine',getNameFromAddress(UEngine.GEngine), true)
+    registerSymbol('GEngine',n)
+    
+    if #r>1 then
+      --save the others as well ?
+      for i=2,#r do
+        local name='GEngine'..i
+        UEngine[name]=r[2]
+        unregisterSymbol(name)
+        local n=getNameFromAddress(UEngine.GEngine,true,false,false)
+        registerSymbol(name,n)    
+      end
+      
     end
   end
 
@@ -1765,14 +1775,20 @@ function UEInfoScanner(t)
   --get the md5 from the first bytes of the file. That's enough to see if anything changed (pe crc field)
   --'some' games get the loaded memory PE file tampered with (prefered image base gets set) so prefer the file for this
   
+  local fs=nil
   local r,r2=pcall(function()
-    local fs=createFileStream(enumModules()[1].PathToFile, fmOpenRead) 
+    fs=createFileStream(enumModules()[1].PathToFile, fmOpenRead or fmShareDenyNone) 
     local b=f.read(1024)
-    fs.destroy()  
+    fs.destroy() fs=nil
     
     local s=byteTableToString(b)
-    versionid=stringToMD5String(s)    
+    versionid=stringToMD5String(s)          
   end)
+  
+  if fs then --in case read fails, then fs is still valid
+    fs.destroy()
+    fs=nil
+  end
   
   if versionid==nil then  
     versionid=md5memory(getAddressSafe(process),4096)
@@ -1992,9 +2008,10 @@ function UEInfoScanner(t)
         return nil,'FindGEngine failed:'..err
       end
       
-      
 
-      s.GEngine=getNameFromAddress(UEngine.GEngine,true,false,false)
+      if UEngine.GEngine and UEngine.GEngine~=0 then      
+        s.GEngine=getNameFromAddress(UEngine.GEngine,true,false,false)
+      end
     end
 
     if UEngine.UObject.Class==nil then --normal situation
@@ -2277,11 +2294,15 @@ MainForm.OnProcessOpened=function(...)
     if couldBeUnrealEngine() then
       LaunchUEInfoScanner()
     else
-      if getProcessAge and getProcessAge()<30000 then --newly created
-        sleep(30000) --wait for the game to load
-        if couldBeUnrealEngine() then
-          if getOpenedProcessID()==pid then
-            LaunchUEInfoScanner()
+      if getProcessAge then
+        local age=getProcessAge()
+        if age==nil then return end
+        if age<30000 then --newly created
+          sleep(30000) --wait for the game to load
+          if couldBeUnrealEngine() then
+            if getOpenedProcessID()==pid then
+              LaunchUEInfoScanner()
+            end
           end
         end
       end
