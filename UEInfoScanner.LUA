@@ -51,6 +51,10 @@ function UClass_enumProperties(class,usealt,r)
   if not r then
     r={}
   end
+  
+  if UEngine==nil or UEngine.FProperty==nil or UEngine.FProperty.Offset==nil then
+    return nil,'UEngine.FProperty.Offset is nil'
+  end
 
   if UEngine.UClass.SuperStruct then
     local super=readPointer(class+UEngine.UClass.SuperStruct)
@@ -364,7 +368,7 @@ function findGameInstanceFPropertyAndFields(t)
     end
 
 
-    if UEngine.FProperty and UEngine.FFieldClass and UEngine.FFieldClass.Name and UEngine.FProperty.Class and UEngine.FProperty.Name and UEngine.FProperty.Owner then
+    if UEngine.FProperty and UEngine.FFieldClass and UEngine.FFieldClass.Name and UEngine.FProperty.Class and UEngine.FProperty.Name and UEngine.FProperty.Offset and UEngine.FProperty.Owner then
       --now process the potentialPropertyLists. We have enough FProperty field info to determine if it's validish or not.  Some of them are meh, and some of them contain everything including super class properties
       --...
       UEngine.FField={}
