@@ -1,7 +1,7 @@
 --UEInfoScanner and UEInfoStructureDissect are licensed under the MIT License by Eric Heijnen / Cheat Engine
 --https://github.com/cheat-engine/UnrealEngineTools
 
-local debugUEInfoScanner=true
+local debugUEInfoScanner=false 
 
 local function log(str)
   if UEngine==nil then
@@ -2245,7 +2245,14 @@ function LaunchUEInfoScanner()
 
 
     t.Priority='tpIdle'
-    local r,err=UEInfoScanner(t)
+  
+    local r,err  
+    if debugUEInfoScanner then
+      r,err=UEInfoScanner(t)
+    else
+      pcall(function() r,err=UEInfoScanner(t) end) 
+    end
+
 
     log('UEInfoScannerThread finished')
     if r then
@@ -2253,7 +2260,6 @@ function LaunchUEInfoScanner()
       synchronize(function()
         UEngine.GUI.miUnrealEngine.caption='Unreal Engine'
       end)
-
 
     else
       if err then
