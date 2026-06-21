@@ -91,7 +91,13 @@ function UEngine_createStructureFromClass(address)
 
   if address and address~=0 then
     local name=UObject_getName(address) --class is an UObject
-    local properties=UClass_enumProperties(address)
+    local properties=UClass_enumProperties(address,false)
+    if properties==nil then
+      properties=UClass_enumProperties(address,true)   
+    else
+      UClass_enumProperties(address,true,properties)   
+    end
+     
 
     --check if this class is already defined, and if so, return that
     --local s=getStructure(name)
