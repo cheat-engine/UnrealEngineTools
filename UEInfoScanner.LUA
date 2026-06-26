@@ -1,7 +1,7 @@
 --UEInfoScanner and UEInfoStructureDissect are licensed under the MIT License by Eric Heijnen / Cheat Engine
 --https://github.com/cheat-engine/UnrealEngineTools
 
-local debugUEInfoScanner=false 
+local debugUEInfoScanner=false
 
 local function log(str)
   if UEngine==nil then
@@ -51,7 +51,7 @@ function UClass_enumProperties(class,usealt,r)
   if not r then
     r={}
   end
-  
+
   if UEngine==nil or UEngine.FProperty==nil or UEngine.FProperty.Offset==nil then
     return nil,'UEngine.FProperty.Offset is nil'
   end
@@ -752,7 +752,7 @@ function FindGEngine(t)
           ms.ScanWritable='scanInclude'
           ms.ScanExecutable='scanExclude'
           ms.ScanCopyOnWrite='scanExclude'
-          
+
           log('scanning for '..ms.Scanvalue)
 
           ms.scan()
@@ -809,7 +809,7 @@ function FindGEngine(t)
     unregisterSymbol('GEngine')
     local n=getNameFromAddress(UEngine.GEngine,true,false,false)
     registerSymbol('GEngine',n)
-    
+
     if #r>1 then
       --save the others as well ?
       for i=2,#r do
@@ -817,9 +817,9 @@ function FindGEngine(t)
         UEngine[name]=r[2]
         unregisterSymbol(name)
         local n=getNameFromAddress(UEngine.GEngine,true,false,false)
-        registerSymbol(name,n)    
+        registerSymbol(name,n)
       end
-      
+
     end
   end
 
@@ -1113,7 +1113,7 @@ function FindObjectArray(t) --and UObject name offset
           end
         end
       else
-        log('FindObjectArray: doesn\'t look like a valid object') 
+        log('FindObjectArray: doesn\'t look like a valid object')
       end
 
 
@@ -1556,7 +1556,24 @@ function FindNamePoolData_older(t)
   end
 
   if #firststringblock>1 then
-    return false,'FindNamePoolData_older needs more refining'
+    --refine more. Some options: #,pointer,None, (variable) #, pointer,ByteProperty
+    --or, the block is allocated as a 0x10000 size
+    local new={}
+    for i=1,#firststringblock do
+      local mri=getMemoryRegionInfo(firststringblock[i])
+      if mri.RegionSize==0x10000 then
+        table.insert(new,firststringblock[i])
+      end
+    end
+    firststringblock=new
+
+    if #firststringblock==0 then
+      return false,'No known stringpool found (2)'
+    end
+
+    if #firststringblock>1 then
+      return false,'FindNamePoolData_older needs more refining'
+    end
   end
 
   --check the format
@@ -1772,35 +1789,35 @@ function UEInfoScanner(t)
   --can be called directly or with a thread
 
   log('UEInfoScanner start');
-  
+
   if process==nil then return false,'No process selected' end
-  
+
   local versionid
   --get the md5 from the first bytes of the file. That's enough to see if anything changed (pe crc field)
   --'some' games get the loaded memory PE file tampered with (prefered image base gets set) so prefer the file for this
-  
+
   local fs=nil
   local r,r2=pcall(function()
-    fs=createFileStream(enumModules()[1].PathToFile, fmOpenRead or fmShareDenyNone) 
-    local b=f.read(1024)
+    fs=createFileStream(enumModules()[1].PathToFile, fmOpenRead or fmShareDenyNone)
+    local b=fs.read(1024)
     fs.destroy() fs=nil
-    
+
     local s=byteTableToString(b)
-    versionid=stringToMD5String(s)          
+    versionid=stringToMD5String(s)
   end)
-  
+
   if fs then --in case read fails, then fs is still valid
     fs.destroy()
     fs=nil
   end
-  
-  if versionid==nil then  
+
+  if versionid==nil then
     versionid=md5memory(getAddressSafe(process),4096)
   end
-  
+
   if versionid==nil then
     log('file and main module unreadable')
-    return false    
+    return false
   end
 
   local id=process..'-'..versionid
@@ -1821,10 +1838,10 @@ function UEInfoScanner(t)
       unregisterStructureDissectOverride2(UEngineStructDissect)
       UEngineStructDissect=nil
     end
-  
+
     if UEngine.GUI then
       if UEngine.GUI.miUnrealEngine then
-        UEngine.GUI.miUnrealEngine.destroy()        
+        UEngine.GUI.miUnrealEngine.destroy()
         UEngine.GUI=nil
       end
     end
@@ -1859,8 +1876,8 @@ function UEInfoScanner(t)
           t=newt
         end
 
-       
-        t[sections[#sections]]=tonumber(value)       
+
+        t[sections[#sections]]=tonumber(value)
       end
     end
 
@@ -1870,7 +1887,7 @@ function UEInfoScanner(t)
     UEngine.NamePoolData=getAddressSafe(s.NamePoolData)
     UEngine.ObjectArray=getAddressSafe(s.ObjectArray)
     UEngine.GEngine=getAddressSafe(s.GEngine)
-    
+
     if UEngine.GEngine then
       local n=getNameFromAddress(UEngine.GEngine,true,false,false)
       if n:find(extractFileNameWithoutExt(process),nil,true) then
@@ -1884,14 +1901,14 @@ function UEInfoScanner(t)
     synchronize(function()
       UEngine.GUI.miStatus.Caption='Loading string table'
     end)
-    
+
     if UEngine.NamePoolData==nil then
       --can happen in the old stringpool format
-      local r,err=FindNamePoolData(t)    
+      local r,err=FindNamePoolData(t)
       if not r then
         log('Failed searching for NamePool:'..err)
         return nil,'FindNamePoolData failed:'..err
-      end      
+      end
     end
 
     local originalDebugState=disableLuaDebug() --disabling debug here for performance reasons
@@ -2011,9 +2028,9 @@ function UEInfoScanner(t)
         end
         return nil,'FindGEngine failed:'..err
       end
-      
 
-      if UEngine.GEngine and UEngine.GEngine~=0 then      
+
+      if UEngine.GEngine and UEngine.GEngine~=0 then
         s.GEngine=getNameFromAddress(UEngine.GEngine,true,false,false)
       end
     end
@@ -2203,12 +2220,12 @@ end
 function couldBeUnrealEngine()
   local pname=extractFileNameWithoutExt(process)
   if pname==nil then return false end
-  
+
   if getAddressSafe(pname..'.agsInit') then return true end
   if getAddressSafe(pname..'.agsInitialize') then return true end
   --if getAddressSafe(pname..'.NvOptimusEnablement') then return true end    --nope (kindergharten has this one as well)
 
-   
+
   if pname:lower():endsWith('shipping') then return true end
 
 
@@ -2218,6 +2235,11 @@ function couldBeUnrealEngine()
     if res then
       if res.ProductVersion and res.ProductVersion:find('%+UE4') then return true end
       if res.ProductVersion and res.ProductVersion:find('%+UE5') then return true end
+
+      if res.OriginalFilename then
+        local ofn=extractFileNameWithoutExt(res.OriginalFilename)
+        if ofn:lower():endsWith('shipping') then return true end
+      end
 
     end
   end
@@ -2249,12 +2271,12 @@ function LaunchUEInfoScanner()
 
 
     t.Priority='tpIdle'
-  
-    local r,err  
+
+    local r,err
     if debugUEInfoScanner then
       r,err=UEInfoScanner(t)
     else
-      pcall(function() r,err=UEInfoScanner(t) end) 
+      pcall(function() r,err=UEInfoScanner(t) end)
     end
 
 
