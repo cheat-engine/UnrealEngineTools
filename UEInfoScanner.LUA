@@ -264,7 +264,7 @@ function findGameInstanceFPropertyAndFields(t)
   for i=1,#bases do
 
     for j=1,32 do
-      if readPointer(bases[i]+j*8) & 0xfffffffffffffff0==UEngine.GameEngineClass then --ue 4.26 and 5 (UE5 used the lowest bits to set if it's an Object or Field, 4.26 used a byte with padding.
+      if readPointer(bases[i]+j*8) & 0xfffffffffffffffe==UEngine.GameEngineClass then --ue 4.26 and 5 (UE5 used the lowest bits to set if it's an Object or Field, 4.26 used a byte with padding.
         if FPropertyOwnerOffset then
           if FPropertyOwnerOffset>j*8 then
             FPropertyOwnerOffset=j*8
