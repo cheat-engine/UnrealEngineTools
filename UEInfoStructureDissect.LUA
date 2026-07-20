@@ -242,7 +242,7 @@ function registerUEngineStructureLookupCallbacks()
   unregisterUEngineStructureLookupCallbacks() --get rid of them first
 
   UEngineStructNameLookup=registerStructureNameLookup(function(address)
-    local obj=UEngine_findStructureStart(address)
+    local obj=UEngine_findObjectStart(address)
     if obj then
       local class=readPointer(obj+UEngine.UObject.Class)
       local nameindex=readPointer(class+UEngine.UClass.Name)
@@ -263,7 +263,7 @@ function registerUEngineStructureLookupCallbacks()
   end
 
   UEngineStructDissect=registerStructureDissectOverride2(function(address)
-    local actual=UEngine_findStructureStart(address)
+    local actual=UEngine_findObjectStart(address)
     
     if actual==address then    
       local s=UEngine_createStructureFromObject(address)

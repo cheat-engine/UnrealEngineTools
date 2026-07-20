@@ -196,6 +196,44 @@ function GetLinkedListSize(p,LinkOffset)
   return c
 end
 
+function UEngine_findObjectStart(startAddress)
+  if UEngine.UObject and UEngine.UObject.Class and UEngine.UObject.Name then
+    local address=startAddress
+    address=address & 0xfffffffffffffff8
+
+    c=0
+    while c<4000 do --bigger range allowed      
+      
+      local p=readPointer(address)
+      if p==nil then
+        return nil,'encountered unreadable memory'
+      end
+
+      if isVTable(p) then
+
+        --verify that Class points to a class and that Name is valid
+        if readDword(address+UEngine.UObject.Name)~=0 then        
+          if UObject_getName(address) then
+            local pl
+            pl=UObject_enumProperties(address)
+
+            if pl then
+              for propname,data in pairs(pl) do
+                if address+data.offset+data.size>startAddress then return address end  --the found object encapsulates the wanted address
+              end
+            end
+            --still here, could be a nested class. Keep searching
+          end
+        end
+
+      end
+      address=address-8
+      c=c+1
+    end
+
+  end
+end
+
 function UEngine_findStructureStart(address)
   address=address & 0xfffffffffffffff8
 
