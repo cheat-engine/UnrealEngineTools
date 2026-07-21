@@ -212,7 +212,7 @@ function UEngine_findObjectStart(startAddress)
       if isVTable(p) then
 
         --verify that Class points to a class and that Name is valid
-        if readDword(address+UEngine.UObject.Name)~=0 then        
+        if readInteger(address+UEngine.UObject.Name)~=0 then        
           if UObject_getName(address) then
             local pl
             pl=UObject_enumProperties(address)
