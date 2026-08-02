@@ -2248,6 +2248,24 @@ function UEInfoScanner(t)
         end
 
         UEngine.GUI.miUnrealEngine.Caption='Unreal Engine'
+        
+        UEngine.GUI.miDissectGEngine=createMenuItem(MainForm)
+        UEngine.GUI.miDissectGEngine.Caption='Dissect GEngine'
+        UEngine.GUI.miDissectGEngine.Name='miDissectGEngine'
+        UEngine.GUI.miDissectGEngine.OnClick=function()
+          --launch a structure dissect window for the GEngine address.
+          local a=getAddressSafe('[GEngine]')
+          if a then
+            local sf=createStructureForm()
+            sf.Column[0].AddressText='[GEngine]'
+            local s=UEngine_createStructureFromObject(a)
+            sf.MainStruct=s
+          end
+
+        end
+        
+        UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miDissectGEngine)
+        
       end)
     end
 
