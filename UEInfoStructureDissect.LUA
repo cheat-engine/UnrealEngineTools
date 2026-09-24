@@ -22,6 +22,7 @@ function UEngine_createStructureFromClass(address)
     e.Name='vftable'
     e.Offset=0
     e.VarType=vtPointer
+    e.DoNotAutoExpand=true
 
     e=UClassStruct.addElement()
     e.Name='Name'
@@ -36,6 +37,7 @@ function UEngine_createStructureFromClass(address)
     e.VarType=vtPointer
     e.ChildStruct=UClassStruct
     e.PreviewPriority=2
+    e.DoNotAutoExpand=true
     
     e=UClassStruct.addElement()
     e.Name='SuperStruct'
@@ -64,6 +66,7 @@ function UEngine_createStructureFromClass(address)
     e.Name='vftable'
     e.Offset=0
     e.VarType=vtPointer
+    e.DoNotAutoExpand=true
 
     e=UObjectStruct.addElement()
     e.Name='Name'
@@ -77,6 +80,7 @@ function UEngine_createStructureFromClass(address)
     e.Offset=UEngine.UObject.Class
     e.VarType=vtPointer
     e.ChildStruct=UClassStruct
+    e.DoNotAutoExpand=true
    
     e.PreviewPriority=2
     
